@@ -1,0 +1,79 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "volatile-lru"]
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: colorbook
+      POSTGRES_PASSWORD: colorbook
+      POSTGRES_DB: colorbook
+    command: ["postgres", "-c", "shared_buffers=256MB"]
+    shm_size: 512mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U colorbook -d colorbook"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  submission:
+    build: .
+    image: colorbook:local
+    command: ["/app/submission"]
+    environment: &env
+      REDIS_ADDR: redis:6379
+      DATABASE_URL: postgres://colorbook:colorbook@postgres:5432/colorbook?sslmode=disable
+      COOKIE_SECRET: dev-cookie-secret
+      INTERNAL_TOKEN: dev-internal-token
+      PROXY_URL: http://proxy:80
+      BLOCKLIST: /app/data/blocklist
+    depends_on: [redis]
+  voting:
+    image: colorbook:local
+    command: ["/app/voting"]
+    environment: *env
+    depends_on: [redis]
+  canvas:
+    image: colorbook:local
+    command: ["/app/canvas"]
+    environment: *env
+    restart: on-failure
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+  archive:
+    image: colorbook:local
+    command: ["/app/archive"]
+    environment: *env
+    restart: on-failure
+    depends_on:
+      postgres:
+        condition: service_healthy
+  realtime:
+    image: colorbook:local
+    command: ["/app/realtime"]
+    environment: *env
+    depends_on: [redis]
+  orchestrator:
+    image: colorbook:local
+    command: ["/app/orchestrator"]
+    environment: *env
+    depends_on: [redis, proxy]
+  gateway:
+    image: colorbook:local
+    command: ["/app/gateway"]
+    environment: *env
+    depends_on: [redis, proxy]
+  proxy:
+    image: caddy:2-alpine
+    volumes:
+      - ./deploy/Caddyfile.proxy:/etc/caddy/Caddyfile:ro
+    depends_on: [submission, voting, canvas, archive, realtime]
+  edge:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/Caddyfile.public:/etc/caddy/Caddyfile:ro
+    depends_on: [gateway]

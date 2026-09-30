@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Let's Write Together</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="brand">Let's Write Together</p>
+      <p class="tag">one shared document. one word a minute. everyone gets a say</p>
+    </div>
+    <nav class="days">
+      <button type="button" id="past">Past submissions</button>
+    </nav>
+  </header>
+  <div class="howto">
+    <button type="button" id="how" aria-expanded="false">How it works</button>
+    <div id="rules" hidden>
+      <p>Every minute, the crowd adds one word to today's document.</p>
+      <ul>
+        <li>Click the red box to join the current round.</li>
+        <li>In the first 30 seconds of each minute, you can type and submit one word. Each player can submit one word per minute.</li>
+          <li>For the whole minute, you can vote for any submitted word, including your own.</li>
+          <li>You can change your vote until the minute ends.</li>
+          <li>When the minute ends, the word with the most votes is added to the document. If two words have the same number of votes, the earliest submission wins.</li>
+          <li>If no word was submitted or nobody voted, the round is skipped and nothing is added.</li>
+      </ul>
+    </div>
+  </div>
+  <main id="sheet">
+    <p id="opened" hidden></p>
+    <div id="pages"></div>
+  </main>
+  <section id="shelf">
+    <h1>See what the world decided to write in the past 31 days</h1>
+    <div id="files"></div>
+  </section>
+  <dialog id="box">
+    <div class="dlg-head">
+      <div class="clocks">
+        <span class="clock-item" id="submit-clock">Submit a word <strong id="submit-left"></strong></span>
+        <span class="clock-item" id="vote-clock">Vote for a word <strong id="vote-left"></strong></span>
+      </div>
+      <button type="button" id="close">Close</button>
+    </div>
+    <div class="search-row">
+      <input id="search" type="search" placeholder="Search this minute" autocomplete="off">
+      <button type="button" id="find">Search</button>
+    </div>
+    <ul id="list"></ul>
+    <form id="compose">
+      <input id="entry" maxlength="48" placeholder="Write a word" autocomplete="off">
+      <button type="submit" id="send">Send</button>
+    </form>
+    <p id="note"></p>
+  </dialog>
+  <script src="/app.js"></script>
+</body>
+</html>

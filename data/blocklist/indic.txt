@@ -1,0 +1,5 @@
+# Extra Indic lemmas. exact/hi.txt is also indexed phonetically.
+bhenchod
+bahanchod
+madarchod
+chutiya
