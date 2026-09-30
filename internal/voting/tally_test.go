@@ -46,15 +46,24 @@ func TestTallySkipAndWinner(t *testing.T) {
 	}
 	rdb.HSet(ctx, keys.Words(3), "1", "hello", "2", "heLLO")
 	rdb.HSet(ctx, keys.Tally(3), "1", "2", "2", "2")
+	rdb.RPush(ctx, keys.Order(3), "1", "2")
 	tied := call("3")
 	if tied["status"] != "winner" || tied["text"] != "hello" || tied["word_id"] != "1" {
 		t.Fatalf("earliest tied word: %v", tied)
 	}
 	rdb.HSet(ctx, keys.Words(5), "10", "later", "2", "earlier")
 	rdb.HSet(ctx, keys.Tally(5), "10", "4", "2", "4")
+	rdb.RPush(ctx, keys.Order(5), "10", "2")
 	order := call("5")
-	if order["text"] != "earlier" || order["word_id"] != "2" {
-		t.Fatalf("numeric id order: %v", order)
+	if order["text"] != "later" || order["word_id"] != "10" {
+		t.Fatalf("arrival order: %v", order)
+	}
+	rdb.HSet(ctx, keys.Words(6), "1", "is", "2", "a")
+	rdb.HSet(ctx, keys.Tally(6), "1", "1", "2", "1")
+	rdb.RPush(ctx, keys.Order(6), "1", "2")
+	words := call("6")
+	if words["text"] != "is" || words["word_id"] != "1" {
+		t.Fatalf("is before a: %v", words)
 	}
 	rdb.HSet(ctx, keys.Words(4), "1", "hello!")
 	rdb.HSet(ctx, keys.Tally(4), "1", "3")

@@ -1,6 +1,7 @@
 package voting
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -115,7 +116,15 @@ func (s *Service) tally(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "skip", "reason": reason})
 		return
 	}
-	winner := earliest(winners)
+	winner, err := s.firstSubmitted(r.Context(), round, winners)
+	if err != nil {
+		problem.Write(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store unavailable")
+		return
+	}
+	if winner == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "skip", "reason": "tie"})
+		return
+	}
 	text, err := s.RDB.HGet(r.Context(), keys.Words(round), winner).Result()
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "skip", "reason": "empty"})
@@ -124,24 +133,26 @@ func (s *Service) tally(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "winner", "word_id": winner, "text": text})
 }
 
-// earliest picks the first submitted word. Ids come from INCR, so the smaller number is older.
-func earliest(ids []string) string {
-	best := ids[0]
-	for _, id := range ids[1:] {
-		if before(id, best) {
-			best = id
+// firstSubmitted returns the tied word that appears first in the arrival list.
+// A single leader does not need that list. A tie with no arrival record is not guessed.
+func (s *Service) firstSubmitted(ctx context.Context, round int64, winners []string) (string, error) {
+	if len(winners) == 1 {
+		return winners[0], nil
+	}
+	order, err := s.RDB.LRange(ctx, keys.Order(round), 0, -1).Result()
+	if err != nil {
+		return "", err
+	}
+	want := make(map[string]struct{}, len(winners))
+	for _, id := range winners {
+		want[id] = struct{}{}
+	}
+	for _, id := range order {
+		if _, ok := want[id]; ok {
+			return id, nil
 		}
 	}
-	return best
-}
-
-func before(a, b string) bool {
-	an, aerr := strconv.ParseInt(a, 10, 64)
-	bn, berr := strconv.ParseInt(b, 10, 64)
-	if aerr == nil && berr == nil && an != bn {
-		return an < bn
-	}
-	return a < b
+	return "", nil
 }
 
 func tokenOK(r *http.Request, token string) bool {
