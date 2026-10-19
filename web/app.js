@@ -263,6 +263,8 @@ async function mint(pair) {
       }),
     });
     keepAccess(body);
+    const el = document.querySelector("#turnstile");
+    if (el) el.replaceChildren();
   } catch (err) {
     if (err.body && err.body.code === "DEVICE_REVOKED") {
       await mint(await deviceKey(true));
@@ -290,9 +292,25 @@ function serverNow() { return Date.now() + state.offset; }
 
 function utcDay(ms) { return new Date(ms).toISOString().slice(0, 10); }
 
+async function publicGet(path) {
+  const res = await fetch(path, { credentials: "same-origin" });
+  const text = await res.text();
+  const body = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const err = new Error(body && body.detail ? body.detail : res.statusText);
+    err.body = body;
+    throw err;
+  }
+  return body;
+}
+
+async function ensureSession() {
+  if (!accessToken || Date.now() >= accessUntil) await restoreSession();
+}
+
 async function api(path, opt = {}) {
   const retry = opt.retry !== false;
-  if (!accessToken || Date.now() >= accessUntil) await restoreSession();
+  await ensureSession();
   const headers = { "Content-Type": "application/json", ...(opt.headers || {}) };
   if (accessToken) headers.Authorization = "Bearer " + accessToken;
   const res = await fetch(path, {
@@ -365,7 +383,14 @@ function join(parts) {
   return out;
 }
 
-function openDialog() {
+async function openDialog() {
+  try {
+    await ensureSession();
+  } catch (err) {
+    openedEl.hidden = false;
+    openedEl.textContent = err.message || "Could not start a session.";
+    return;
+  }
   document.querySelector("#box").showModal();
 }
 
@@ -513,7 +538,7 @@ async function showShelf() {
   filesEl.replaceChildren();
   let days = [];
   try {
-    const body = await api("/v1/canvas/days");
+    const body = await publicGet("/v1/canvas/days");
     days = body.days || [];
   } catch {
     days = [];
@@ -652,7 +677,8 @@ async function loadEssay(day) {
   const path = day === state.today ? "/v1/canvas/today" : "/v1/canvas/" + day;
   let fragments = [];
   try {
-    const body = await api(path);
+    // Canvas reads are public; do not wait on session mint.
+    const body = await publicGet(path);
     fragments = body.fragments || [];
   } catch {
     fragments = [];
@@ -815,16 +841,35 @@ function onEvent(name, raw) {
 }
 
 async function boot() {
+  // Paint the paper at once. Session mint (Turnstile + proof-of-work) can take
+  // several seconds and used to leave #pages empty until it finished.
+  renderEssay();
+  const essayP = publicGet("/v1/canvas/today")
+    .then((body) => {
+      const fragments = body.fragments || [];
+      state.fragments = fragments.slice();
+      if (state.today) state.essays.set(state.today, fragments);
+      if (!document.body.classList.contains("shelf")) renderEssay();
+      return fragments;
+    })
+    .catch(() => {
+      if (!document.body.classList.contains("shelf")) renderEssay();
+      return [];
+    });
   try {
     await restoreSession();
   } catch (err) {
     openedEl.hidden = false;
     openedEl.textContent = err.message || "Could not start a session.";
+    await essayP;
     return;
   }
   const cur = await api("/v1/rounds/current");
   applySnap(cur);
-  await loadEssay(state.today);
+  const fragments = await essayP;
+  state.essays.set(state.today, fragments);
+  state.fragments = fragments.slice();
+  if (!document.body.classList.contains("shelf")) renderEssay();
   await loadWords();
   if (location.hash === "#past") showShelf();
   const es = new EventSource("/v1/events");
