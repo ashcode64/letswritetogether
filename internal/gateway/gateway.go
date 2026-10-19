@@ -1,14 +1,14 @@
 package gateway
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+	"crypto/ed25519"
 	"encoding/json"
 	"hash/fnv"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,21 +16,26 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"colorbook/internal/auth"
 	"colorbook/internal/live"
 	"colorbook/internal/problem"
+	"colorbook/internal/svcjwt"
 	"colorbook/web"
 )
 
 type Service struct {
-	RDB     *redis.Client
-	Secret  string
-	Secure  bool
-	Proxy   *httputil.ReverseProxy
-	lim     *limiter
+	RDB             *redis.Client
+	Secret          string
+	Secure          bool
+	TrustCF         bool
+	TurnstileSecret string
+	TurnstileSite   string
+	PowMax          int
+	Priv            ed25519.PrivateKey
+	Proxy           *httputil.ReverseProxy
+	lim             *limiter
 }
 
-func New(rdb *redis.Client, secret, proxyURL string, secure bool) *Service {
+func New(rdb *redis.Client, secret, proxyURL string, secure bool, priv ed25519.PrivateKey, turnstileSecret, turnstileSite string, powMax int) *Service {
 	target, err := url.Parse(proxyURL)
 	if err != nil {
 		panic(err)
@@ -40,18 +45,28 @@ func New(rdb *redis.Client, secret, proxyURL string, secure bool) *Service {
 	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		problem.Write(w, http.StatusBadGateway, "UPSTREAM", "the next service did not answer")
 	}
-	return &Service{RDB: rdb, Secret: secret, Secure: secure, Proxy: p, lim: newLimiter()}
+	if powMax < 1 {
+		powMax = 20000
+	}
+	return &Service{
+		RDB: rdb, Secret: secret, Secure: secure, TrustCF: os.Getenv("TRUST_CF_CONNECTING_IP") == "1",
+		TurnstileSecret: turnstileSecret, TurnstileSite: turnstileSite, PowMax: powMax,
+		Priv: priv, Proxy: p, lim: newLimiter(),
+	}
 }
 
 func (s *Service) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/sessions/config", s.sessionConfig)
+	mux.HandleFunc("POST /v1/sessions/challenge", s.challenge)
 	mux.HandleFunc("POST /v1/sessions", s.session)
+	mux.HandleFunc("POST /v1/sessions/refresh", s.refresh)
 	mux.HandleFunc("GET /v1/rounds/current", s.current)
-	mux.HandleFunc("POST /v1/rounds/{id}/words", s.forward("submit", 30))
-	mux.HandleFunc("GET /v1/rounds/{id}/words", s.forward("read", 120))
-	mux.HandleFunc("PUT /v1/rounds/{id}/vote", s.forward("vote", 60))
-	mux.HandleFunc("GET /v1/canvas/", s.forward("read", 120))
-	mux.HandleFunc("GET /v1/canvas/today", s.forward("read", 120))
-	mux.HandleFunc("GET /v1/events", s.forward("events", 60))
+	mux.HandleFunc("POST /v1/rounds/{id}/words", s.forward("submit", 30, svcjwt.AudSubmission))
+	mux.HandleFunc("GET /v1/rounds/{id}/words", s.forward("read", 120, svcjwt.AudSubmission))
+	mux.HandleFunc("PUT /v1/rounds/{id}/vote", s.forward("vote", 60, svcjwt.AudVoting))
+	mux.HandleFunc("GET /v1/canvas/", s.public("read", 120))
+	mux.HandleFunc("GET /v1/canvas/today", s.public("read", 120))
+	mux.HandleFunc("GET /v1/events", s.public("events", 60))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -69,34 +84,17 @@ func (s *Service) file(name, ctype string) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", ctype)
 		w.Header().Set("Cache-Control", "no-cache")
+		if name == "index.html" {
+			w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; connect-src 'self' https://challenges.cloudflare.com; style-src 'self'; img-src 'self'; base-uri 'self'; frame-ancestors 'none'")
+		}
 		_, _ = w.Write(b)
 	}
 }
 
-func (s *Service) session(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
-	if !s.lim.allow(ip+":session", 10, time.Minute) {
-		w.Header().Set("Retry-After", "2")
-		problem.Write(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many new sessions")
-		return
-	}
-	did, err := auth.FromRequest(r, s.Secret)
-	if err != nil {
-		buf := make([]byte, 16)
-		if _, err := rand.Read(buf); err != nil {
-			problem.Write(w, http.StatusInternalServerError, "UNAVAILABLE", "could not mint a device")
-			return
-		}
-		did = hex.EncodeToString(buf)
-	}
-	auth.SetCookie(w, s.Secret, did, s.Secure)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
 func (s *Service) current(w http.ResponseWriter, r *http.Request) {
-	did, err := auth.FromRequest(r, s.Secret)
+	did, err := s.device(r)
 	if err != nil {
-		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "session required")
+		writeDeviceErr(w, err)
 		return
 	}
 	snap, err := live.ReadPhase(r.Context(), s.RDB)
@@ -119,25 +117,62 @@ func (s *Service) current(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Service) forward(kind string, perMinute int) http.HandlerFunc {
+func (s *Service) forward(kind string, perMinute int, aud string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		did, err := auth.FromRequest(r, s.Secret)
+		did, err := s.device(r)
 		if err != nil {
-			problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "session required")
+			writeDeviceErr(w, err)
 			return
 		}
-		if !s.lim.allow(clientIP(r)+":"+kind, perMinute, time.Minute) {
+		if !s.lim.allow(s.clientIP(r)+":"+kind, perMinute, time.Minute) {
 			w.Header().Set("Retry-After", "1")
 			problem.Write(w, http.StatusTooManyRequests, "RATE_LIMITED", "slow down")
 			return
 		}
+		tok, err := s.bearer(aud, did)
+		if err != nil {
+			problem.Write(w, http.StatusServiceUnavailable, "UNAVAILABLE", "could not sign the request")
+			return
+		}
 		r.Header.Del("X-Internal-Token")
-		r.Header.Set("X-Did", did)
+		r.Header.Del("X-Did")
+		r.Header.Set("Authorization", "Bearer "+tok)
 		s.Proxy.ServeHTTP(w, r)
 	}
 }
 
-func clientIP(r *http.Request) string {
+func (s *Service) public(kind string, perMinute int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.lim.allow(s.clientIP(r)+":"+kind, perMinute, time.Minute) {
+			w.Header().Set("Retry-After", "1")
+			problem.Write(w, http.StatusTooManyRequests, "RATE_LIMITED", "slow down")
+			return
+		}
+		r.Header.Del("Authorization")
+		r.Header.Del("X-Internal-Token")
+		r.Header.Del("X-Did")
+		s.Proxy.ServeHTTP(w, r)
+	}
+}
+
+func writeDeviceErr(w http.ResponseWriter, err error) {
+	if err.Error() == "revoked" {
+		problem.Write(w, http.StatusUnauthorized, "DEVICE_REVOKED", "this device was revoked")
+		return
+	}
+	if _, ok := err.(errString); ok {
+		problem.Write(w, http.StatusUnauthorized, "SESSION_REQUIRED", "session required")
+		return
+	}
+	problem.Write(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store unavailable")
+}
+
+func (s *Service) clientIP(r *http.Request) string {
+	if s.TrustCF {
+		if ip := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); ip != "" {
+			return ip
+		}
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		return strings.TrimSpace(strings.Split(xff, ",")[0])
 	}

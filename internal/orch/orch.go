@@ -11,15 +11,18 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"crypto/ed25519"
+
 	"colorbook/internal/clock"
 	"colorbook/internal/keys"
 	"colorbook/internal/live"
+	"colorbook/internal/svcjwt"
 )
 
 type Orch struct {
 	RDB      *redis.Client
 	Proxy    string
-	Token    string
+	Signer   ed25519.PrivateKey
 	ID       string
 	HTTP     *http.Client
 	ready    bool
@@ -112,13 +115,13 @@ func (o *Orch) Close(ctx context.Context, round int64) error {
 		return nil
 	}
 	var t tally
-	if err := o.post(ctx, fmt.Sprintf("%s/internal/v1/rounds/%d/tally", o.Proxy, round), nil, &t); err != nil {
+	if err := o.post(ctx, fmt.Sprintf("%s/internal/v1/rounds/%d/tally", o.Proxy, round), nil, &t, svcjwt.AudVoting); err != nil {
 		return err
 	}
 	day := time.Unix(round*60, 0).UTC().Format(time.DateOnly)
 	if t.Status == "winner" && t.Text != "" {
 		body := map[string]any{"day": day, "round_number": round, "word": t.Text}
-		if err := o.post(ctx, o.Proxy+"/internal/v1/canvas/append", body, nil); err != nil {
+		if err := o.post(ctx, o.Proxy+"/internal/v1/canvas/append", body, nil, svcjwt.AudCanvas); err != nil {
 			return err
 		}
 		if err := o.RDB.Set(ctx, key, "win", 48*time.Hour).Err(); err != nil {
@@ -142,14 +145,14 @@ func (o *Orch) maybeSeal(ctx context.Context, sec int64) error {
 		return nil
 	}
 	yday := time.Unix(sec, 0).UTC().AddDate(0, 0, -1).Format(time.DateOnly)
-	if err := o.post(ctx, fmt.Sprintf("%s/internal/v1/days/%s/seal", o.Proxy, yday), nil, nil); err != nil {
+	if err := o.post(ctx, fmt.Sprintf("%s/internal/v1/days/%s/seal", o.Proxy, yday), nil, nil, svcjwt.AudArchive); err != nil {
 		return err
 	}
 	o.sealed = today
 	return nil
 }
 
-func (o *Orch) post(ctx context.Context, url string, body any, out any) error {
+func (o *Orch) post(ctx context.Context, url string, body any, out any, aud string) error {
 	var r io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -162,7 +165,14 @@ func (o *Orch) post(ctx context.Context, url string, body any, out any) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Internal-Token", o.Token)
+	now := time.Now()
+	tok, err := svcjwt.Sign(o.Signer, svcjwt.Claims{
+		Aud: aud, Role: svcjwt.RoleOrchestrator, Iat: now.Unix(), Exp: now.Add(30 * time.Second).Unix(),
+	})
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

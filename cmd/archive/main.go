@@ -8,6 +8,7 @@ import (
 	"colorbook/internal/archive"
 	"colorbook/internal/pgstore"
 	"colorbook/internal/serve"
+	"colorbook/internal/svcjwt"
 )
 
 func main() {
@@ -15,7 +16,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &archive.Service{Store: store, Token: serve.Env("INTERNAL_TOKEN", "")}
+	pubs, err := svcjwt.LoadPubs()
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := &archive.Service{Store: store, OrchPub: pubs.Orch}
 	mux := http.NewServeMux()
 	s.Register(mux)
 	serve.Listen(mux)

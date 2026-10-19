@@ -2,6 +2,7 @@ package voting
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -12,11 +13,13 @@ import (
 	"colorbook/internal/live"
 	"colorbook/internal/problem"
 	"colorbook/internal/script"
+	"colorbook/internal/svcjwt"
 )
 
 type Service struct {
-	RDB   *redis.Client
-	Token string
+	RDB        *redis.Client
+	GatewayPub ed25519.PublicKey
+	OrchPub    ed25519.PublicKey
 }
 
 func (s *Service) Register(mux *http.ServeMux) {
@@ -28,13 +31,13 @@ func (s *Service) Register(mux *http.ServeMux) {
 }
 
 type putBody struct {
-	WordID string `json:"word_id"`
-	Seq    int    `json:"seq"`
+	WordID json.RawMessage `json:"word_id"`
+	Seq    int             `json:"seq"`
 }
 
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
-	did := r.Header.Get("X-Did")
-	if did == "" {
+	did, err := svcjwt.Subject(r, s.GatewayPub, svcjwt.AudVoting, svcjwt.RoleGateway)
+	if err != nil {
 		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "session required")
 		return
 	}
@@ -44,7 +47,12 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body putBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.WordID == "" || body.Seq < 1 {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Seq < 1 {
+		problem.Write(w, http.StatusBadRequest, "BAD_WORD", "word_id and seq are required")
+		return
+	}
+	word, ok := voteWord(body.WordID)
+	if !ok {
 		problem.Write(w, http.StatusBadRequest, "BAD_WORD", "word_id and seq are required")
 		return
 	}
@@ -59,7 +67,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	status, _, err := script.RunVote(r.Context(), s.RDB, []string{
 		keys.Vote(round, did), keys.Tally(round), keys.Submit(round, did), keys.Words(round),
-	}, body.WordID, body.Seq, keys.TTL)
+	}, word, body.Seq, keys.TTL)
 	if err != nil {
 		problem.Write(w, http.StatusServiceUnavailable, "UNAVAILABLE", "store unavailable")
 		return
@@ -68,15 +76,30 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	case "MISSING":
 		problem.Write(w, http.StatusBadRequest, "BAD_WORD", "unknown word")
 	case "STALE":
-		writeJSON(w, http.StatusOK, map[string]any{"code": "STALE_SEQ", "word_id": body.WordID})
+		writeJSON(w, http.StatusOK, map[string]any{"code": "STALE_SEQ", "word_id": word})
 	default:
-		writeJSON(w, http.StatusOK, map[string]any{"word_id": body.WordID, "seq": body.Seq})
+		writeJSON(w, http.StatusOK, map[string]any{"word_id": word, "seq": body.Seq})
 	}
 }
 
+// voteWord accepts a word id, or null to remove the vote. A missing field is refused.
+func voteWord(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		if len(raw) == 0 {
+			return "", false
+		}
+		return "", true
+	}
+	var word string
+	if err := json.Unmarshal(raw, &word); err != nil {
+		return "", false
+	}
+	return word, true
+}
+
 func (s *Service) tally(w http.ResponseWriter, r *http.Request) {
-	if !tokenOK(r, s.Token) {
-		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
+	if _, err := svcjwt.Subject(r, s.OrchPub, svcjwt.AudVoting, svcjwt.RoleOrchestrator); err != nil {
+		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "orchestrator token required")
 		return
 	}
 	round, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -153,11 +176,6 @@ func (s *Service) firstSubmitted(ctx context.Context, round int64, winners []str
 		}
 	}
 	return "", nil
-}
-
-func tokenOK(r *http.Request, token string) bool {
-	got := r.Header.Get("X-Internal-Token")
-	return token != "" && got == token
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

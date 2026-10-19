@@ -9,6 +9,7 @@ import (
 	"colorbook/internal/live"
 	"colorbook/internal/pgstore"
 	"colorbook/internal/serve"
+	"colorbook/internal/svcjwt"
 )
 
 func main() {
@@ -16,7 +17,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &canvas.Service{Store: store, RDB: live.Open(), Token: serve.Env("INTERNAL_TOKEN", "")}
+	pubs, err := svcjwt.LoadPubs()
+	if err != nil {
+		log.Fatal(err)
+	}
+	s := &canvas.Service{Store: store, RDB: live.Open(), OrchPub: pubs.Orch}
 	mux := http.NewServeMux()
 	s.Register(mux)
 	serve.Listen(mux)

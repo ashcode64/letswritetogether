@@ -1,0 +1,20 @@
+# Production edge. The VM publishes nothing.
+# Create a Cloudflare Tunnel whose public hostname points at http://edge:80,
+# put its token in TUNNEL_TOKEN, then:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+# Replace the dev Turnstile keys and signing seeds before a public audience.
+# SSH belongs on an Oracle bastion or a Cloudflare Access SSH app, not on an open port.
+services:
+  edge:
+    ports: !override []
+  gateway:
+    environment:
+      TRUST_CF_CONNECTING_IP: "1"
+      COOKIE_SECURE: "1"
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN}
+    depends_on: [edge]

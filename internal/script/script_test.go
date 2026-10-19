@@ -84,4 +84,14 @@ func TestVoteSeqAndSwitch(t *testing.T) {
 	if n1 != 1 || n2 != 1 {
 		t.Fatalf("tally 1=%d 2=%d", n1, n2)
 	}
+	if vote("v", "", 3) != "OK" {
+		t.Fatal("remove")
+	}
+	n2, _ = rdb.HGet(ctx, keys.Tally(round), "2").Int()
+	if n2 != 0 {
+		t.Fatalf("removed vote still counted: %d", n2)
+	}
+	if vote("v", "2", 3) != "STALE" {
+		t.Fatal("older vote must not restore a removed one")
+	}
 }

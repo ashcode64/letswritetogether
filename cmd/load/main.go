@@ -26,12 +26,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			jar, _ := cookiejar.New(nil)
-			client := &http.Client{Jar: jar}
-			if _, err := client.Post(*url+"/v1/sessions", "application/json", nil); err != nil {
-				log.Printf("viewer session: %v", err)
-				return
-			}
+			client := &http.Client{}
 			ctx, cancel := context.WithTimeout(context.Background(), *hold)
 			defer cancel()
 			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, *url+"/v1/events", nil)
@@ -66,11 +61,14 @@ func main() {
 
 func paint(origin string, n int) error {
 	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar, Timeout: 5 * time.Second}
-	if _, err := client.Post(origin+"/v1/sessions", "application/json", nil); err != nil {
+	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
+	token, err := mint(origin, client)
+	if err != nil {
 		return err
 	}
-	res, err := client.Get(origin + "/v1/rounds/current")
+	reqCur, _ := http.NewRequest(http.MethodGet, origin+"/v1/rounds/current", nil)
+	reqCur.Header.Set("Authorization", "Bearer "+token)
+	res, err := client.Do(reqCur)
 	if err != nil {
 		return err
 	}
@@ -82,6 +80,7 @@ func paint(origin string, n int) error {
 	word := letterWord(n)
 	req, _ := http.NewRequest(http.MethodPost, origin+"/v1/rounds/"+roundOf(body)+"/words", strings.NewReader(fmt.Sprintf(`{"text":%q,"seq":1}`, word)))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
 	res, err = client.Do(req)
 	if err != nil {
 		return err
@@ -95,7 +94,9 @@ func paint(origin string, n int) error {
 		WordID string `json:"word_id"`
 	}
 	_ = json.Unmarshal(b, &created)
-	listRes, err := client.Get(origin + "/v1/rounds/" + roundOf(body) + "/words")
+	listReq, _ := http.NewRequest(http.MethodGet, origin+"/v1/rounds/"+roundOf(body)+"/words", nil)
+	listReq.Header.Set("Authorization", "Bearer "+token)
+	listRes, err := client.Do(listReq)
 	if err != nil {
 		return err
 	}
@@ -113,6 +114,7 @@ func paint(origin string, n int) error {
 		}
 		vote, _ := http.NewRequest(http.MethodPut, origin+"/v1/rounds/"+roundOf(body)+"/vote", strings.NewReader(fmt.Sprintf(`{"word_id":%q,"seq":2}`, w.ID)))
 		vote.Header.Set("Content-Type", "application/json")
+		vote.Header.Set("Authorization", "Bearer "+token)
 		vres, err := client.Do(vote)
 		if err != nil {
 			return err

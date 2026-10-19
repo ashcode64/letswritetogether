@@ -23,9 +23,13 @@ services:
       REDIS_ADDR: redis:6379
       DATABASE_URL: postgres://colorbook:colorbook@postgres:5432/colorbook?sslmode=disable
       COOKIE_SECRET: dev-cookie-secret
-      INTERNAL_TOKEN: dev-internal-token
       PROXY_URL: http://proxy:80
       BLOCKLIST: /app/data/blocklist
+      POW_MAX: "20000"
+      TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+      TURNSTILE_SECRET: 1x0000000000000000000000000000000AA
+      GATEWAY_PUBLIC_KEY: 27c30c39147ea94f76fbce080482f3f2108c82eb45ef8f4848ee0c95687565f4
+      ORCH_PUBLIC_KEY: 4aeeab06046bf431bbb1d02d3fbe210fdc04c495f56811b3e8974a425d9e49da
     depends_on: [redis]
   voting:
     image: colorbook:local
@@ -58,12 +62,16 @@ services:
   orchestrator:
     image: colorbook:local
     command: ["/app/orchestrator"]
-    environment: *env
+    environment:
+      <<: *env
+      ORCH_PRIVATE_KEY: 4c93e269cec503816456b958e754b48be39561df173fafd77bd440d29924ec1c
     depends_on: [redis, proxy]
   gateway:
     image: colorbook:local
     command: ["/app/gateway"]
-    environment: *env
+    environment:
+      <<: *env
+      GATEWAY_PRIVATE_KEY: 34363dfe0fa1a2d3aa926cbf941b800cdcfae44b309d0e2af2ab8e2adca4c747
     depends_on: [redis, proxy]
   proxy:
     image: caddy:2-alpine

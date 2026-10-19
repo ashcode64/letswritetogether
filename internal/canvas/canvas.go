@@ -1,6 +1,7 @@
 package canvas
 
 import (
+	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -10,12 +11,13 @@ import (
 	"colorbook/internal/live"
 	"colorbook/internal/pgstore"
 	"colorbook/internal/problem"
+	"colorbook/internal/svcjwt"
 )
 
 type Service struct {
-	Store *pgstore.Store
-	RDB   *redis.Client
-	Token string
+	Store   *pgstore.Store
+	RDB     *redis.Client
+	OrchPub ed25519.PublicKey
 }
 
 func (s *Service) Register(mux *http.ServeMux) {
@@ -93,8 +95,8 @@ type appendBody struct {
 }
 
 func (s *Service) append(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Internal-Token") != s.Token || s.Token == "" {
-		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
+	if _, err := svcjwt.Subject(r, s.OrchPub, svcjwt.AudCanvas, svcjwt.RoleOrchestrator); err != nil {
+		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "orchestrator token required")
 		return
 	}
 	var body appendBody

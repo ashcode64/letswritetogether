@@ -2,29 +2,43 @@ package voting
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
 	"colorbook/internal/keys"
+	"colorbook/internal/svcjwt"
 )
 
 func TestTallySkipAndWinner(t *testing.T) {
 	ctx := context.Background()
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	svc := &Service{RDB: rdb, Token: "t"}
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+	svc := &Service{RDB: rdb, OrchPub: pub}
 	mux := http.NewServeMux()
 	svc.Register(mux)
+	now := time.Now()
+	tok, err := svcjwt.Sign(priv, svcjwt.Claims{Aud: svcjwt.AudVoting, Role: svcjwt.RoleOrchestrator, Iat: now.Unix(), Exp: now.Add(30 * time.Second).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	call := func(round string) map[string]any {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/internal/v1/rounds/"+round+"/tally", nil)
-		req.Header.Set("X-Internal-Token", "t")
+		req.Header.Set("Authorization", "Bearer "+tok)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != 200 {

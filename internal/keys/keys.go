@@ -19,5 +19,8 @@ func Seq(round int64) string   { return fmt.Sprintf("wordseq:%d", round) }
 func Vote(round int64, did string) string {
 	return fmt.Sprintf("vote:%d:%s", round, did)
 }
-func Tally(round int64) string  { return fmt.Sprintf("tally:%d", round) }
-func Closed(round int64) string { return fmt.Sprintf("closed:%d", round) }
+func Tally(round int64) string      { return fmt.Sprintf("tally:%d", round) }
+func Closed(round int64) string     { return fmt.Sprintf("closed:%d", round) }
+func Device(did string) string      { return "device:" + did }
+func Refresh(sum string) string     { return "refresh:" + sum }
+func RefreshUsed(sum string) string { return "refreshused:" + sum }

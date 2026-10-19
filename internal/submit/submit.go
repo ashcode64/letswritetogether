@@ -8,17 +8,21 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"crypto/ed25519"
+
 	"colorbook/internal/filter"
 	"colorbook/internal/keys"
 	"colorbook/internal/live"
 	"colorbook/internal/problem"
 	"colorbook/internal/script"
+	"colorbook/internal/svcjwt"
 	"colorbook/internal/words"
 )
 
 type Service struct {
-	RDB    *redis.Client
-	Filter *filter.Filter
+	RDB        *redis.Client
+	Filter     *filter.Filter
+	GatewayPub ed25519.PublicKey
 }
 
 func (s *Service) Register(mux *http.ServeMux) {
@@ -35,9 +39,8 @@ type postBody struct {
 }
 
 func (s *Service) post(w http.ResponseWriter, r *http.Request) {
-	did := r.Header.Get("X-Did")
-	if did == "" {
-		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "session required")
+	did, ok := s.device(w, r)
+	if !ok {
 		return
 	}
 	round, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
@@ -79,6 +82,11 @@ func (s *Service) post(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, http.StatusConflict, "ALREADY_SUBMITTED", "you already submitted this minute")
 		return
 	}
+	if body.Seq >= 1 {
+		_, _, _ = script.RunVote(r.Context(), s.RDB, []string{
+			keys.Vote(round, did), keys.Tally(round), keys.Submit(round, did), keys.Words(round),
+		}, id, body.Seq, keys.TTL)
+	}
 	if created {
 		_ = live.Publish(r.Context(), s.RDB, "word.approved", map[string]any{
 			"round_id": round, "word_id": id, "text": text,
@@ -91,7 +99,19 @@ func (s *Service) post(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, map[string]any{"word_id": id, "text": text, "created": created})
 }
 
+func (s *Service) device(w http.ResponseWriter, r *http.Request) (string, bool) {
+	did, err := svcjwt.Subject(r, s.GatewayPub, svcjwt.AudSubmission, svcjwt.RoleGateway)
+	if err != nil {
+		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "session required")
+		return "", false
+	}
+	return did, true
+}
+
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.device(w, r); !ok {
+		return
+	}
 	round, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		problem.Write(w, http.StatusBadRequest, "BAD_WORD", "bad round")

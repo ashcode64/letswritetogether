@@ -1,5 +1,6 @@
 # Public site. Browser traffic only. Does not route /internal.
-# On the Oracle VM, put Cloudflare in front and proxy HTTPS to this port.
+# Local compose publishes port 80. Production compose does not: cloudflared
+# dials out and forwards to this listener, so the VM has no inbound port.
 # Do not cache or buffer /v1/events. Sealed canvas days send their own Cache-Control.
 :80 {
 	reverse_proxy gateway:8080 {

@@ -11,6 +11,7 @@ import (
 	"colorbook/internal/live"
 	"colorbook/internal/orch"
 	"colorbook/internal/serve"
+	"colorbook/internal/svcjwt"
 )
 
 func main() {
@@ -18,12 +19,16 @@ func main() {
 	if _, err := rand.Read(buf); err != nil {
 		log.Fatal(err)
 	}
+	signer, err := svcjwt.PrivateFromEnv("ORCH_PRIVATE_KEY")
+	if err != nil {
+		log.Fatal(err)
+	}
 	o := &orch.Orch{
-		RDB:   live.Open(),
-		Proxy: serve.Env("PROXY_URL", "http://127.0.0.1:8081"),
-		Token: serve.Env("INTERNAL_TOKEN", ""),
-		ID:    hex.EncodeToString(buf),
-		HTTP:  &http.Client{Timeout: 3 * time.Second},
+		RDB:    live.Open(),
+		Proxy:  serve.Env("PROXY_URL", "http://127.0.0.1:8081"),
+		Signer: signer,
+		ID:     hex.EncodeToString(buf),
+		HTTP:   &http.Client{Timeout: 3 * time.Second},
 	}
 	ctx := context.Background()
 	for {

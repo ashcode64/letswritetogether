@@ -1,15 +1,17 @@
 package archive
 
 import (
+	"crypto/ed25519"
 	"net/http"
 
 	"colorbook/internal/pgstore"
 	"colorbook/internal/problem"
+	"colorbook/internal/svcjwt"
 )
 
 type Service struct {
-	Store *pgstore.Store
-	Token string
+	Store   *pgstore.Store
+	OrchPub ed25519.PublicKey
 }
 
 func (s *Service) Register(mux *http.ServeMux) {
@@ -20,8 +22,8 @@ func (s *Service) Register(mux *http.ServeMux) {
 }
 
 func (s *Service) seal(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Internal-Token") != s.Token || s.Token == "" {
-		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "internal token required")
+	if _, err := svcjwt.Subject(r, s.OrchPub, svcjwt.AudArchive, svcjwt.RoleOrchestrator); err != nil {
+		problem.Write(w, http.StatusUnauthorized, "UNAUTHORIZED", "orchestrator token required")
 		return
 	}
 	day := r.PathValue("day")

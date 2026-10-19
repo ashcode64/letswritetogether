@@ -44,13 +44,22 @@ const VoteLua = `
 local word = ARGV[1]
 local seq = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
-if redis.call('HEXISTS', KEYS[4], word) == 0 then
-  return {'MISSING', '', ''}
-end
 local curSeq = redis.call('HGET', KEYS[1], 'seq')
 local curWord = redis.call('HGET', KEYS[1], 'word')
 if curSeq and tonumber(curSeq) >= seq then
   return {'STALE', curWord or '', curSeq}
+end
+if word == '' then
+  if curWord and curWord ~= false and curWord ~= '' then
+    redis.call('HINCRBY', KEYS[2], curWord, -1)
+  end
+  redis.call('HSET', KEYS[1], 'word', '', 'seq', tostring(seq))
+  redis.call('EXPIRE', KEYS[1], ttl)
+  redis.call('EXPIRE', KEYS[2], ttl)
+  return {'OK', '', tostring(seq)}
+end
+if redis.call('HEXISTS', KEYS[4], word) == 0 then
+  return {'MISSING', '', ''}
 end
 if (not curWord) or curWord == false or curWord == '' then
   redis.call('HSET', KEYS[1], 'word', word, 'seq', tostring(seq))

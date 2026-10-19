@@ -104,7 +104,10 @@ The browser calls these on the public site. `POST /v1/sessions` and `GET /v1/rou
 
 | Method | Path | Body / result |
 | --- | --- | --- |
-| `POST` | `/v1/sessions` | Sets an HttpOnly `did` cookie, HMAC-signed, for one year. |
+| `GET` | `/v1/sessions/config` | Turnstile site key. No session. |
+| `POST` | `/v1/sessions/challenge` | A short proof-of-work challenge. |
+| `POST` | `/v1/sessions` | Device-key proof, proof-of-work, and a Turnstile token. Returns a 5-minute access token and sets a rotating HttpOnly refresh cookie. |
+| `POST` | `/v1/sessions/refresh` | Device-key proof plus the refresh cookie. The old cookie cannot be used again. |
 | `GET` | `/v1/rounds/current` | `round_id`, `phase`, `server_time`, time left to submit, time left to vote, and the shuffle seed. |
 | `POST` | `/v1/rounds/{id}/words` | `{ "text", "seq" }`. One submission per device per minute. |
 | `GET` | `/v1/rounds/{id}/words` | Approved fragments for this minute. No counts. |
@@ -118,7 +121,7 @@ Errors are `application/problem+json`. Codes include `SUBMISSION_CLOSED`, `VOTIN
 
 ## Internal API
 
-These routes require `X-Internal-Token`. The public Caddyfile does not route `/internal`, and the private proxy is not published. The orchestrator is the only caller.
+These routes require a 30-second Ed25519 JWT. Tally, append, and seal accept only a token signed by the orchestrator key. The gateway key cannot close a round. The public Caddyfile does not route `/internal`, and the private proxy is not published.
 
 | Method | Path | Effect |
 | --- | --- | --- |
@@ -134,7 +137,7 @@ Postgres 16 stores `days` and `slots`. A slot exists only for a minute that elec
 
 ## Run it locally
 
-Docker Compose publishes the public site on port 80 without TLS, so a lab machine can open it directly. Production should put Cloudflare in front of that port, cache sealed days, and neither cache nor buffer `/v1/events`.
+Docker Compose publishes the public site on port 80 without TLS, so a lab machine can open it directly. Production uses `docker-compose.prod.yml`: cloudflared dials out to Cloudflare, port 80 is not published, and the gateway trusts `CF-Connecting-IP`. SSH stays on a bastion. Do not cache or buffer `/v1/events`.
 
 ```bash
 docker compose up --build -d
@@ -142,7 +145,7 @@ docker compose up --build -d
 
 Open `http://localhost/`.
 
-The Compose file uses local defaults: Postgres user, password, and database `colorbook`, `COOKIE_SECRET=dev-cookie-secret`, and `INTERNAL_TOKEN=dev-internal-token`. Change those before exposing a host. Set `COOKIE_SECURE=1` only when the public site is HTTPS. The image tag shared by the Go services is `colorbook:local`. The page, stylesheet, and script are embedded in the gateway binary, so a UI change needs `docker compose up --build -d gateway`.
+The Compose file uses local defaults: Postgres user, password, and database `colorbook`, `COOKIE_SECRET=dev-cookie-secret`, Cloudflare's always-pass Turnstile test keys, and dev Ed25519 seeds. Change those before exposing a host. `COOKIE_SECURE=1` is set by the production compose. The image tag shared by the Go services is `colorbook:local`. The page, stylesheet, and script are embedded in the gateway binary, so a UI change needs `docker compose up --build -d gateway`.
 
 Go 1.23 is the language version. Tests use the standard toolchain:
 
