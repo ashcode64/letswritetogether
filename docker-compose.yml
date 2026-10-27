@@ -26,7 +26,7 @@ services:
       retries: 10
 
   mendr-gateway:
-    image: teammendr/themendr:static-site-latest
+    image: teammendr/themendr:latest
     ports:
       - "80:80"
       - "8080:8080"
