@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
-  title: Colorbook Gateway (public sharedpage.app)
+  title: Sharedpage Gateway (public sharedpage.app)
   version: 1.0.0
   description: Same public routes as localhost; separate source so CP can attach a second ingress host.
-x-mendr-service: colorbook-gateway
-x-mendr-source: colorbook-public-prod
+x-mendr-service: sharedpage-gateway
+x-mendr-source: sharedpage-public-prod
 x-mendr-host: sharedpage.app
 x-mendr-enforce: observe
 servers:

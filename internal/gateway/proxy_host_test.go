@@ -28,7 +28,7 @@ func TestProxyDirectorSetsProxyHost(t *testing.T) {
 	}))
 	t.Cleanup(up.Close)
 
-	s := New(rdb, "secret", up.URL, "colorbook-internal", false, priv, testTurnstile, "site", 200)
+	s := New(rdb, "secret", up.URL, "sharedpage-internal", false, priv, testTurnstile, "site", 200)
 	req := httptest.NewRequest(http.MethodGet, "/v1/canvas/today", nil)
 	req.Host = "localhost"
 	rec := httptest.NewRecorder()
@@ -36,7 +36,7 @@ func TestProxyDirectorSetsProxyHost(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("status %d %s", rec.Code, rec.Body.String())
 	}
-	if gotHost != "colorbook-internal" {
-		t.Fatalf("upstream Host = %q, want colorbook-internal", gotHost)
+	if gotHost != "sharedpage-internal" {
+		t.Fatalf("upstream Host = %q, want sharedpage-internal", gotHost)
 	}
 }

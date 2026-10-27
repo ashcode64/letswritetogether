@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bring up colorbook + Mendr, then register routes from .env.mendr / .env.
+# Bring up sharedpage + dual Mendr edges, then register both tenants.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -20,7 +20,6 @@ if [[ -z "$ENV_FILE" ]]; then
 fi
 
 echo "==> using env file: $ENV_FILE"
-# Export for compose variable substitution and for register.sh
 set -a
 # shellcheck disable=SC1090
 source <(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' -e 's/\r$//' "$ROOT/$ENV_FILE" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=')
@@ -35,21 +34,26 @@ fi
 echo "==> docker compose up"
 "${COMPOSE[@]}" up --build -d
 
-echo "==> waiting for mendr-gateway healthy"
-tries=0
-until "${COMPOSE[@]}" ps mendr-gateway 2>/dev/null | grep -qi healthy; do
-  tries=$((tries + 1))
-  if (( tries > 60 )); then
-    echo "WARN: mendr-gateway not healthy yet; registering anyway" >&2
-    break
-  fi
-  sleep 2
-done
+wait_healthy() {
+  local svc="$1"
+  local tries=0
+  until "${COMPOSE[@]}" ps "$svc" 2>/dev/null | grep -qi healthy; do
+    tries=$((tries + 1))
+    if (( tries > 60 )); then
+      echo "WARN: $svc not healthy yet; continuing" >&2
+      return 0
+    fi
+    sleep 2
+  done
+}
 
-# Compose already runs mendr-register; also run on host so operators see logs
-# and so registration works even if the one-shot container image pull fails.
-echo "==> registering with control plane"
-bash "$ROOT/mendr/scripts/register.sh"
+echo "==> waiting for Mendr edges"
+wait_healthy mendr-gateway-public
+wait_healthy mendr-gateway-private
+
+echo "==> registering public + private tenants"
+MENDR_SIDE=public bash "$ROOT/mendr/scripts/register.sh"
+MENDR_SIDE=private bash "$ROOT/mendr/scripts/register.sh"
 
 echo "==> deploy complete"
 "${COMPOSE[@]}" ps

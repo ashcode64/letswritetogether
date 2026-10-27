@@ -31,13 +31,13 @@ func TestPostSetsProxyHost(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	o := &Orch{
-		RDB: rdb, Proxy: srv.URL, ProxyHost: "colorbook-internal",
+		RDB: rdb, Proxy: srv.URL, ProxyHost: "sharedpage-internal",
 		Signer: priv, ID: "a",
 	}
 	if err := o.Close(context.Background(), 200); err != nil {
 		t.Fatal(err)
 	}
-	if gotHost != "colorbook-internal" {
-		t.Fatalf("Host = %q, want colorbook-internal", gotHost)
+	if gotHost != "sharedpage-internal" {
+		t.Fatalf("Host = %q, want sharedpage-internal", gotHost)
 	}
 }

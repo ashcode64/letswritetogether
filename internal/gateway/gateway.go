@@ -37,7 +37,7 @@ type Service struct {
 }
 
 // New builds the gateway. proxyHost, when set (PROXY_HOST), is forced on every
-// reverse-proxy hop so Mendr matches the private ingress table (colorbook-internal).
+// reverse-proxy hop so Mendr matches the private ingress table (sharedpage-internal).
 func New(rdb *redis.Client, secret, proxyURL, proxyHost string, secure bool, priv ed25519.PrivateKey, turnstileSecret, turnstileSite string, powMax int) *Service {
 	target, err := url.Parse(proxyURL)
 	if err != nil {

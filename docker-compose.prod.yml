@@ -1,11 +1,11 @@
 # Production edge. The VM publishes nothing.
-# Create a Cloudflare Tunnel whose public hostname points at http://mendr-gateway:80,
+# Create a Cloudflare Tunnel whose public hostname points at http://mendr-gateway-public:80,
 # put its token in TUNNEL_TOKEN, then:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.mendr up --build -d
 # Replace the dev Turnstile keys and signing seeds before a public audience.
 # SSH belongs on an Oracle bastion or a Cloudflare Access SSH app, not on an open port.
 services:
-  mendr-gateway:
+  mendr-gateway-public:
     ports: !override []
   gateway:
     environment:
@@ -17,4 +17,4 @@ services:
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN}
-    depends_on: [mendr-gateway]
+    depends_on: [mendr-gateway-public]

@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
-  title: Colorbook Voting
+  title: Sharedpage Voting
   version: 1.0.0
-x-mendr-service: colorbook-voting
-x-mendr-source: colorbook-gateway
-x-mendr-host: colorbook-internal
+x-mendr-service: sharedpage-voting
+x-mendr-source: sharedpage-gateway
+x-mendr-host: sharedpage-internal
 x-mendr-enforce: observe
 servers:
   - url: http://voting:8080

@@ -63,19 +63,19 @@ A hit is `422 WORD_REJECTED` and is never published. A pass publishes the origin
 
 ## Architecture
 
-Seven Go 1.23 services. Public writes are REST. Live updates are Server-Sent Events. Redis holds the live minute. Postgres stores essays and nothing else on the hot path. Browser and service-to-service REST go through **one Mendr data-plane edge** with two ingress hosts. Redis pub/sub does not go through Mendr.
+Seven Go 1.23 services. Public writes are REST. Live updates are Server-Sent Events. Redis holds the live minute. Postgres stores essays and nothing else on the hot path. Browser traffic and service-to-service REST go through **two Mendr data-plane edges** (public + private), each on its own control-plane tenant, so the public edge never syncs `/internal` routes. Redis pub/sub does not go through Mendr.
 
 ```mermaid
 flowchart LR
-  browser[Browser] --> mendr[Mendr data plane]
-  mendr -->|"Host: localhost / sharedpage.app"| gateway[gateway]
-  gateway -->|"Host: colorbook-internal"| mendr
-  orchestrator[orchestrator] -->|"Host: colorbook-internal"| mendr
-  mendr --> submission[submission]
-  mendr --> voting[voting]
-  mendr --> canvas[canvas]
-  mendr --> realtime[realtime]
-  mendr --> archive[archive]
+  browser[Browser] --> pub[mendr-gateway-public]
+  pub -->|"Host: sharedpage.app"| gateway[gateway]
+  gateway -->|"Host: sharedpage-internal"| priv[mendr-gateway-private]
+  orchestrator[orchestrator] -->|"Host: sharedpage-internal"| priv
+  priv --> submission[submission]
+  priv --> voting[voting]
+  priv --> canvas[canvas]
+  priv --> realtime[realtime]
+  priv --> archive[archive]
   submission --> redis[(Redis)]
   voting --> redis
   orchestrator --> redis
@@ -86,7 +86,7 @@ flowchart LR
 
 | Service | Role |
 | --- | --- |
-| gateway | Mints the device cookie, rate-limits, serves the page, and forwards public REST to Mendr with `Host: colorbook-internal`. |
+| gateway | Mints the device cookie, rate-limits, serves the page, and forwards public REST to the **private** Mendr edge with `Host: sharedpage-internal`. |
 | submission | Checks the charset and blocklist, stores one exact text per round, and publishes `word.approved`. |
 | voting | Applies votes in one Redis Lua script. Tallies the minute when the orchestrator asks. Does not publish per-vote counts. |
 | orchestrator | Holds the lease, closes each minute, appends a winner or records a skip, and asks archive to seal at UTC midnight. |
@@ -98,7 +98,7 @@ Submission, voting, canvas, archive, and realtime do not call each other.
 
 The orchestrator is the only writer of the phase key. It takes a Redis lease (`SET NX PX`) and renews it. If it loses the lease it does not close a round. A stored outcome makes a retry a no-op, so a skip cannot later become a blank slot and a winner cannot be appended twice. The unique key is `(day, round_number)`.
 
-Public Host tables send traffic **only** to `colorbook-gateway`. `/internal/*` exists only under Host `colorbook-internal`. See [docs/MENDR_INTEGRATION.md](docs/MENDR_INTEGRATION.md) and [docs/MENDR_ONBOARDING_RUNBOOK.md](docs/MENDR_ONBOARDING_RUNBOOK.md).
+Public Host tables send traffic **only** to `sharedpage-gateway`. `/internal/*` exists only under Host `sharedpage-internal` on the **private** edge. See [docs/MENDR_INTEGRATION.md](docs/MENDR_INTEGRATION.md), [docs/MENDR_ONBOARDING_RUNBOOK.md](docs/MENDR_ONBOARDING_RUNBOOK.md), and [docs/adr/0002-two-mendr-edges.md](docs/adr/0002-two-mendr-edges.md).
 
 ## Public API
 
@@ -123,7 +123,7 @@ Errors are `application/problem+json`. Codes include `SUBMISSION_CLOSED`, `VOTIN
 
 ## Internal API
 
-These routes require a 30-second Ed25519 JWT. Tally, append, and seal accept only a token signed by the orchestrator key. The gateway key cannot close a round. Internal paths are registered only on Mendr Host `colorbook-internal`, not on the public host.
+These routes require a 30-second Ed25519 JWT. Tally, append, and seal accept only a token signed by the orchestrator key. The gateway key cannot close a round. Internal paths are registered only on the **private** Mendr Host `sharedpage-internal`, not on the public edge.
 
 | Method | Path | Effect |
 | --- | --- | --- |
@@ -139,8 +139,8 @@ Postgres 16 stores `days` and `slots`. A slot exists only for a minute that elec
 
 ## Run it locally
 
-1. Copy `.env.mendr.example` → `.env.mendr` and set `MENDR_CONTROL_PLANE_URL` plus `GATEWAY_EDGE_API_KEY`.
-2. Deploy (starts the stack and registers OpenAPI + host identity with the control plane from that env file).
+1. Copy `.env.mendr.example` → `.env.mendr` and set `MENDR_CONTROL_PLANE_URL` plus `GATEWAY_EDGE_API_KEY_PUBLIC` and `GATEWAY_EDGE_API_KEY_PRIVATE` (two CP tenants).
+2. Deploy (starts both Mendr edges and registers public + private tenants).
 
 ```bash
 # Linux / macOS / Git Bash
@@ -150,17 +150,18 @@ Postgres 16 stores `days` and `slots`. A slot exists only for a minute that elec
 .\mendr\scripts\deploy.ps1
 ```
 
-Or plain Compose — the `mendr-register` one-shot runs after `mendr-gateway` is healthy when `MENDR_AUTO_REGISTER=true`:
+Or plain Compose — `mendr-register-public` and `mendr-register-private` run when `MENDR_AUTO_REGISTER=true`:
 
 ```bash
 docker compose --env-file .env.mendr up --build -d
 # re-register later:
-docker compose --env-file .env.mendr run --rm mendr-register
+docker compose --env-file .env.mendr run --rm mendr-register-public
+docker compose --env-file .env.mendr run --rm mendr-register-private
 ```
 
 Open `http://localhost/`.
 
-Production overlay: cloudflared dials out to Cloudflare and targets `http://mendr-gateway:80`. Port 80 is not published. The gateway trusts `CF-Connecting-IP`.
+Production overlay: cloudflared dials out to Cloudflare and targets `http://mendr-gateway-public:80`. Port 80 is not published. The private edge stays unpublished. The gateway trusts `CF-Connecting-IP`.
 
 ```bash
 DEPLOY_PROD=1 ./mendr/scripts/deploy.sh

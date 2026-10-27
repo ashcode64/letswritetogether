@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
-  title: Colorbook Gateway (public localhost)
+  title: Sharedpage Gateway (public localhost)
   version: 1.0.0
   description: Public browser routes served by gateway. No /internal.
-x-mendr-service: colorbook-gateway
-x-mendr-source: colorbook-public
+x-mendr-service: sharedpage-gateway
+x-mendr-source: sharedpage-public
 x-mendr-host: localhost
 x-mendr-enforce: observe
 servers:

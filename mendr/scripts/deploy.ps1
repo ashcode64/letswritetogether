@@ -1,4 +1,4 @@
-# Bring up colorbook + Mendr, then register routes from .env.mendr / .env.
+# Bring up sharedpage + dual Mendr edges, then register both tenants.
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
@@ -41,16 +41,25 @@ Write-Host "==> docker compose up"
 & docker @composeArgs up --build -d
 if ($LASTEXITCODE -ne 0) { throw "docker compose up failed" }
 
-Write-Host "==> waiting for mendr-gateway"
-$tries = 0
-while ($tries -lt 60) {
-    $ps = & docker @composeArgs ps mendr-gateway 2>$null | Out-String
-    if ($ps -match "healthy") { break }
-    Start-Sleep -Seconds 2
-    $tries++
+function Wait-Healthy([string]$Service) {
+    $tries = 0
+    while ($tries -lt 60) {
+        $ps = & docker @composeArgs ps $Service 2>$null | Out-String
+        if ($ps -match "healthy") { return }
+        Start-Sleep -Seconds 2
+        $tries++
+    }
+    Write-Warning "$Service not healthy yet; continuing"
 }
 
-Write-Host "==> registering with control plane"
+Write-Host "==> waiting for Mendr edges"
+Wait-Healthy "mendr-gateway-public"
+Wait-Healthy "mendr-gateway-private"
+
+Write-Host "==> registering public + private tenants"
+$env:MENDR_SIDE = "public"
+& (Join-Path $PSScriptRoot "register.ps1")
+$env:MENDR_SIDE = "private"
 & (Join-Path $PSScriptRoot "register.ps1")
 
 Write-Host "==> deploy complete"

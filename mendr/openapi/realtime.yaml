@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
-  title: Colorbook Realtime
+  title: Sharedpage Realtime
   version: 1.0.0
-x-mendr-service: colorbook-realtime
-x-mendr-source: colorbook-gateway
-x-mendr-host: colorbook-internal
+x-mendr-service: sharedpage-realtime
+x-mendr-source: sharedpage-gateway
+x-mendr-host: sharedpage-internal
 x-mendr-enforce: observe
 servers:
   - url: http://realtime:8080

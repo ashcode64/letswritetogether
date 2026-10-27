@@ -1,5 +1,5 @@
 #!/bin/sh
-# Entrypoint for the mendr-register Compose one-shot service.
+# Entrypoint for mendr-register-public / mendr-register-private (MENDR_SIDE set in compose).
 set -eu
 
 if [ "${MENDR_AUTO_REGISTER:-true}" = "false" ] || [ "${MENDR_AUTO_REGISTER:-true}" = "0" ]; then

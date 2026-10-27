@@ -1,10 +1,10 @@
 openapi: 3.0.3
 info:
-  title: Colorbook Submission
+  title: Sharedpage Submission
   version: 1.0.0
-x-mendr-service: colorbook-submission
-x-mendr-source: colorbook-gateway
-x-mendr-host: colorbook-internal
+x-mendr-service: sharedpage-submission
+x-mendr-source: sharedpage-gateway
+x-mendr-host: sharedpage-internal
 x-mendr-enforce: observe
 servers:
   - url: http://submission:8080

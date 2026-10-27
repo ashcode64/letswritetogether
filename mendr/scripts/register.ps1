@@ -1,5 +1,5 @@
-# Idempotent Mendr CP registration for colorbook dual-host ingress.
-# Loads .env.mendr / .env from the repo root when present.
+# Idempotent Mendr CP registration for sharedpage dual-edge ingress.
+# Set MENDR_SIDE=public|private (default: both when unset).
 $ErrorActionPreference = "Stop"
 
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..\..")
@@ -17,7 +17,6 @@ function Import-DotEnv([string]$Path) {
         if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
             $value = $value.Substring(1, $value.Length - 2)
         }
-        # Do not clobber vars already set in the shell / CI
         $existing = [Environment]::GetEnvironmentVariable($name, "Process")
         if ([string]::IsNullOrEmpty($existing)) {
             Set-Item -Path "Env:$name" -Value $value
@@ -36,6 +35,19 @@ if ($env:MENDR_AUTO_REGISTER -eq "false" -or $env:MENDR_AUTO_REGISTER -eq "0") {
     exit 0
 }
 
+$Side = $env:MENDR_SIDE
+if ([string]::IsNullOrEmpty($Side)) {
+    Write-Host "==> MENDR_SIDE unset — registering public then private"
+    $env:MENDR_SIDE = "public"
+    & $PSCommandPath
+    $env:MENDR_SIDE = "private"
+    & $PSCommandPath
+    exit 0
+}
+if ($Side -ne "public" -and $Side -ne "private") {
+    throw "MENDR_SIDE must be public or private (got: $Side)"
+}
+
 $OpenApiDir = if ($env:MENDR_OPENAPI_DIR) { $env:MENDR_OPENAPI_DIR } else { Join-Path $Root "mendr\openapi" }
 
 function Resolve-CpUrl {
@@ -44,7 +56,6 @@ function Resolve-CpUrl {
     if (-not $url) { $url = $env:MENDR_CONTROL_PLANE_URL }
     if (-not $url) { $url = "http://127.0.0.1:8095" }
     $url = $url.TrimEnd("/")
-    # Host-side register: rewrite Docker DNS to loopback
     if (-not (Test-Path "/.dockerenv") -and $url -match "host\.docker\.internal") {
         $url = $url -replace "host\.docker\.internal", "127.0.0.1"
     }
@@ -52,16 +63,30 @@ function Resolve-CpUrl {
 }
 
 $Cp = Resolve-CpUrl
-$Tenant = if ($env:MENDR_TENANT_ID) { $env:MENDR_TENANT_ID } else { "00000000-0000-0000-0000-000000000001" }
 $PublicHost = if ($env:PUBLIC_HOST) { $env:PUBLIC_HOST } else { "localhost" }
 $PublicHostProd = if ($env:PUBLIC_HOST_PROD) { $env:PUBLIC_HOST_PROD } else { "sharedpage.app" }
+$PrivateHost = if ($env:PRIVATE_HOST) { $env:PRIVATE_HOST } else { "sharedpage-internal" }
 $WaitSec = if ($env:MENDR_REGISTER_WAIT_SEC) { [int]$env:MENDR_REGISTER_WAIT_SEC } else { 120 }
+
+if ($Side -eq "public") {
+    if ($env:MENDR_TENANT_ID) { $Tenant = $env:MENDR_TENANT_ID }
+    elseif ($env:MENDR_TENANT_ID_PUBLIC) { $Tenant = $env:MENDR_TENANT_ID_PUBLIC }
+    else { $Tenant = "00000000-0000-0000-0000-000000000001" }
+    if ($env:GATEWAY_EDGE_API_KEY_PUBLIC) { $ApiKey = $env:GATEWAY_EDGE_API_KEY_PUBLIC }
+    else { $ApiKey = $env:GATEWAY_INTERNAL_API_KEY }
+} else {
+    if ($env:MENDR_TENANT_ID) { $Tenant = $env:MENDR_TENANT_ID }
+    elseif ($env:MENDR_TENANT_ID_PRIVATE) { $Tenant = $env:MENDR_TENANT_ID_PRIVATE }
+    else { $Tenant = "00000000-0000-0000-0000-000000000002" }
+    if ($env:GATEWAY_EDGE_API_KEY_PRIVATE) { $ApiKey = $env:GATEWAY_EDGE_API_KEY_PRIVATE }
+    else { $ApiKey = $env:GATEWAY_INTERNAL_API_KEY }
+}
 
 function Get-CpHeaders {
     $h = @{ "X-Tenant-Id" = $Tenant }
-    if ($env:GATEWAY_INTERNAL_API_KEY) {
-        $h["Authorization"] = "Bearer $($env:GATEWAY_INTERNAL_API_KEY)"
-        $h["X-Api-Key"] = $env:GATEWAY_INTERNAL_API_KEY
+    if ($ApiKey) {
+        $h["Authorization"] = "Bearer $ApiKey"
+        $h["X-Api-Key"] = $ApiKey
     }
     return $h
 }
@@ -95,6 +120,8 @@ function Test-CpReachable {
     return $false
 }
 
+Write-Host "==> side: $Side"
+Write-Host "==> tenant: $Tenant"
 Write-Host "==> CP: $Cp"
 Write-Host "==> OpenAPI: $OpenApiDir"
 Write-Host "==> waiting for CP (up to ${WaitSec}s)"
@@ -111,65 +138,62 @@ if ($elapsed -ge $WaitSec -and -not (Test-CpReachable)) {
     throw "Control plane not reachable at $Cp"
 }
 
-$services = @(
-    @{ name = "colorbook-public"; url = $null },
-    @{ name = "colorbook-public-prod"; url = $null },
-    @{ name = "colorbook-gateway"; url = "http://gateway:8080" },
-    @{ name = "colorbook-submission"; url = "http://submission:8080" },
-    @{ name = "colorbook-voting"; url = "http://voting:8080" },
-    @{ name = "colorbook-canvas"; url = "http://canvas:8080" },
-    @{ name = "colorbook-archive"; url = "http://archive:8080" },
-    @{ name = "colorbook-realtime"; url = "http://realtime:8080" }
-)
-
-foreach ($s in $services) {
-    Write-Host "register $($s.name)"
-    if ($s.url) {
-        Invoke-CpJson Post "/api/services" @{ name = $s.name; baseUrl = $s.url; healthEndpoint = "/healthz" } | Out-Null
-        Write-Host "instance $($s.name) -> $($s.url)"
-        Invoke-CpJson Post "/api/services/$($s.name)/instances" @{ baseUrl = $s.url; weight = 100 } | Out-Null
+function Register-Service($Name, $Url) {
+    Write-Host "register $Name"
+    if ($Url) {
+        Invoke-CpJson Post "/api/services" @{ name = $Name; baseUrl = $Url; healthEndpoint = "/healthz" } | Out-Null
+        Write-Host "instance $Name -> $Url"
+        Invoke-CpJson Post "/api/services/$Name/instances" @{ baseUrl = $Url; weight = 100 } | Out-Null
     } else {
-        Invoke-CpJson Post "/api/services" @{ name = $s.name; description = "synthetic ingress source" } | Out-Null
+        Invoke-CpJson Post "/api/services" @{ name = $Name; description = "synthetic ingress source" } | Out-Null
     }
 }
 
-$specs = @(
-    "gateway-localhost.yaml",
-    "gateway-sharedpage.yaml",
-    "submission.yaml",
-    "voting.yaml",
-    "canvas.yaml",
-    "archive.yaml",
-    "realtime.yaml"
-)
-
-foreach ($name in $specs) {
-    $file = Join-Path $OpenApiDir $name
+function Import-OpenApi($Name) {
+    $file = Join-Path $OpenApiDir $Name
     if (-not (Test-Path $file)) { throw "Missing OpenAPI file $file" }
-    Write-Host "dry-run $name"
+    Write-Host "dry-run $Name"
     $dry = Invoke-CpYaml "/api/services/import-openapi/dry-run" $file
     $dryText = ($dry | ConvertTo-Json -Compress)
     Write-Host ($dryText.Substring(0, [Math]::Min(400, $dryText.Length)))
     $rawSpec = Get-Content -Raw $file
-    if ($name -match "submission|voting|canvas|archive|realtime") {
-        if ($rawSpec -notmatch "x-mendr-host:\s*colorbook-internal") {
-            throw "Private import $name missing x-mendr-host: colorbook-internal"
+    if ($Name -match "submission|voting|canvas|archive|realtime") {
+        if ($rawSpec -notmatch "x-mendr-host:\s*sharedpage-internal" -and $rawSpec -notmatch [regex]::Escape("x-mendr-host: $PrivateHost")) {
+            throw "Private import $Name missing x-mendr-host: $PrivateHost"
         }
     }
-    Write-Host "import $name"
+    Write-Host "import $Name"
     Invoke-CpYaml "/api/services/import-openapi" $file | Out-Null
 }
 
-@(
-    @{ host = $PublicHost; source = "colorbook-public" },
-    @{ host = $PublicHostProd; source = "colorbook-public-prod" },
-    @{ host = "colorbook-internal"; source = "colorbook-gateway" }
-) | ForEach-Object {
-    Write-Host "hostident $($_.host) -> $($_.source)"
-    Invoke-CpJson Post "/api/services/ingress-host-identity" @{ host = $_.host; sourceService = $_.source } | Out-Null
+if ($Side -eq "public") {
+    Register-Service "sharedpage-public" $null
+    Register-Service "sharedpage-public-prod" $null
+    Register-Service "sharedpage-gateway" "http://gateway:8080"
+    foreach ($name in @("gateway-localhost.yaml", "gateway-sharedpage.yaml")) {
+        Import-OpenApi $name
+    }
+    @(
+        @{ host = $PublicHost; source = "sharedpage-public" },
+        @{ host = $PublicHostProd; source = "sharedpage-public-prod" }
+    ) | ForEach-Object {
+        Write-Host "hostident $($_.host) -> $($_.source)"
+        Invoke-CpJson Post "/api/services/ingress-host-identity" @{ host = $_.host; sourceService = $_.source } | Out-Null
+    }
+} else {
+    Register-Service "sharedpage-gateway" "http://gateway:8080"
+    Register-Service "sharedpage-submission" "http://submission:8080"
+    Register-Service "sharedpage-voting" "http://voting:8080"
+    Register-Service "sharedpage-canvas" "http://canvas:8080"
+    Register-Service "sharedpage-archive" "http://archive:8080"
+    Register-Service "sharedpage-realtime" "http://realtime:8080"
+    foreach ($name in @("submission.yaml", "voting.yaml", "canvas.yaml", "archive.yaml", "realtime.yaml")) {
+        Import-OpenApi $name
+    }
+    Write-Host "hostident $PrivateHost -> sharedpage-gateway"
+    Invoke-CpJson Post "/api/services/ingress-host-identity" @{ host = $PrivateHost; sourceService = "sharedpage-gateway" } | Out-Null
 }
 
 Write-Host ""
-Write-Host "==> Registration complete. After edge sync:"
-Write-Host "curl -sS -H 'Host: $PublicHost' http://127.0.0.1/ | head"
+Write-Host "==> Registration complete ($Side)."
 Write-Host "Done."

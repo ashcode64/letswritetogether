@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Idempotent Mendr CP registration for colorbook dual-host ingress.
+# Idempotent Mendr CP registration for sharedpage dual-edge ingress.
+# Set MENDR_SIDE=public|private (default: both when run from deploy).
 # Loads .env.mendr / .env from the repo root when present.
 set -euo pipefail
 
@@ -16,7 +17,6 @@ load_env_file() {
   set +a
 }
 
-# Prefer explicit env already in the shell; then .env.mendr; then .env
 if [[ -z "${MENDR_ENV_LOADED:-}" ]]; then
   load_env_file "$ROOT/.env.mendr"
   load_env_file "$ROOT/.env"
@@ -28,7 +28,6 @@ if [[ "${MENDR_AUTO_REGISTER:-true}" == "false" || "${MENDR_AUTO_REGISTER:-true}
   exit 0
 fi
 
-# Register may run on the host while the edge uses host.docker.internal.
 resolve_cp_url() {
   local url="${MENDR_REGISTER_CONTROL_PLANE_URL:-${MENDR_CP_URL:-${MENDR_CONTROL_PLANE_URL:-http://127.0.0.1:8095}}}"
   url="${url%/}"
@@ -38,16 +37,41 @@ resolve_cp_url() {
   printf '%s' "$url"
 }
 
+SIDE="${MENDR_SIDE:-}"
 CP="$(resolve_cp_url)"
-TENANT="${MENDR_TENANT_ID:-00000000-0000-0000-0000-000000000001}"
 PUBLIC_HOST="${PUBLIC_HOST:-localhost}"
 PUBLIC_HOST_PROD="${PUBLIC_HOST_PROD:-sharedpage.app}"
+PRIVATE_HOST="${PRIVATE_HOST:-sharedpage-internal}"
 WAIT_SEC="${MENDR_REGISTER_WAIT_SEC:-120}"
 
+# Resolve tenant + API key for this side (edge key is preferred for /api/services).
+case "$SIDE" in
+  public)
+    TENANT="${MENDR_TENANT_ID:-${MENDR_TENANT_ID_PUBLIC:-00000000-0000-0000-0000-000000000001}}"
+    # Prefer mendr_ edge key (X-Api-Key); compose may already map it into GATEWAY_INTERNAL_API_KEY.
+    API_KEY="${GATEWAY_EDGE_API_KEY_PUBLIC:-${GATEWAY_INTERNAL_API_KEY:-}}"
+    ;;
+  private)
+    TENANT="${MENDR_TENANT_ID:-${MENDR_TENANT_ID_PRIVATE:-00000000-0000-0000-0000-000000000002}}"
+    API_KEY="${GATEWAY_EDGE_API_KEY_PRIVATE:-${GATEWAY_INTERNAL_API_KEY:-}}"
+    ;;
+  "")
+    # Host-side deploy: register both sides sequentially.
+    echo "==> MENDR_SIDE unset — registering public then private"
+    MENDR_SIDE=public MENDR_ENV_LOADED=1 bash "$ROOT/mendr/scripts/register.sh"
+    MENDR_SIDE=private MENDR_ENV_LOADED=1 bash "$ROOT/mendr/scripts/register.sh"
+    exit 0
+    ;;
+  *)
+    echo "ERROR: MENDR_SIDE must be public or private (got: $SIDE)" >&2
+    exit 1
+    ;;
+esac
+
 auth_args=()
-if [[ -n "${GATEWAY_INTERNAL_API_KEY:-}" ]]; then
-  auth_args+=(-H "Authorization: Bearer ${GATEWAY_INTERNAL_API_KEY}")
-  auth_args+=(-H "X-Api-Key: ${GATEWAY_INTERNAL_API_KEY}")
+if [[ -n "$API_KEY" ]]; then
+  auth_args+=(-H "Authorization: Bearer ${API_KEY}")
+  auth_args+=(-H "X-Api-Key: ${API_KEY}")
 fi
 auth_args+=(-H "X-Tenant-Id: ${TENANT}")
 
@@ -72,6 +96,8 @@ wait_for_cp() {
   exit 1
 }
 
+echo "==> side: $SIDE"
+echo "==> tenant: $TENANT"
 echo "==> CP: $CP"
 echo "==> OpenAPI: $OPENAPI_DIR"
 wait_for_cp
@@ -107,8 +133,8 @@ import_openapi() {
   echo
   case "$(basename "$file")" in
     submission.yaml|voting.yaml|canvas.yaml|archive.yaml|realtime.yaml)
-      if ! grep -q 'x-mendr-host: colorbook-internal' "$file"; then
-        echo "ERROR: $file missing x-mendr-host: colorbook-internal" >&2
+      if ! grep -q "x-mendr-host: ${PRIVATE_HOST}" "$file" && ! grep -q 'x-mendr-host: sharedpage-internal' "$file"; then
+        echo "ERROR: $file missing x-mendr-host: ${PRIVATE_HOST}" >&2
         exit 1
       fi
       ;;
@@ -138,43 +164,48 @@ host_ident() {
     "$CP/api/services/ingress-host-identity" >/dev/null
 }
 
-register_service "colorbook-public"
-register_service "colorbook-public-prod"
-register_service "colorbook-gateway" "http://gateway:8080"
-register_service "colorbook-submission" "http://submission:8080"
-register_service "colorbook-voting" "http://voting:8080"
-register_service "colorbook-canvas" "http://canvas:8080"
-register_service "colorbook-archive" "http://archive:8080"
-register_service "colorbook-realtime" "http://realtime:8080"
-
-upsert_instance "colorbook-gateway" "http://gateway:8080"
-upsert_instance "colorbook-submission" "http://submission:8080"
-upsert_instance "colorbook-voting" "http://voting:8080"
-upsert_instance "colorbook-canvas" "http://canvas:8080"
-upsert_instance "colorbook-archive" "http://archive:8080"
-upsert_instance "colorbook-realtime" "http://realtime:8080"
-
-for f in \
-  gateway-localhost.yaml \
-  gateway-sharedpage.yaml \
-  submission.yaml \
-  voting.yaml \
-  canvas.yaml \
-  archive.yaml \
-  realtime.yaml
-do
-  import_openapi "$OPENAPI_DIR/$f"
-done
-
-host_ident "$PUBLIC_HOST" "colorbook-public"
-host_ident "$PUBLIC_HOST_PROD" "colorbook-public-prod"
-host_ident "colorbook-internal" "colorbook-gateway"
+if [[ "$SIDE" == "public" ]]; then
+  register_service "sharedpage-public"
+  register_service "sharedpage-public-prod"
+  register_service "sharedpage-gateway" "http://gateway:8080"
+  upsert_instance "sharedpage-gateway" "http://gateway:8080"
+  for f in gateway-localhost.yaml gateway-sharedpage.yaml; do
+    import_openapi "$OPENAPI_DIR/$f"
+  done
+  host_ident "$PUBLIC_HOST" "sharedpage-public"
+  host_ident "$PUBLIC_HOST_PROD" "sharedpage-public-prod"
+else
+  # Identity source for Host: sharedpage-internal (no need for public OpenAPI on this tenant).
+  register_service "sharedpage-gateway" "http://gateway:8080"
+  register_service "sharedpage-submission" "http://submission:8080"
+  register_service "sharedpage-voting" "http://voting:8080"
+  register_service "sharedpage-canvas" "http://canvas:8080"
+  register_service "sharedpage-archive" "http://archive:8080"
+  register_service "sharedpage-realtime" "http://realtime:8080"
+  upsert_instance "sharedpage-gateway" "http://gateway:8080"
+  upsert_instance "sharedpage-submission" "http://submission:8080"
+  upsert_instance "sharedpage-voting" "http://voting:8080"
+  upsert_instance "sharedpage-canvas" "http://canvas:8080"
+  upsert_instance "sharedpage-archive" "http://archive:8080"
+  upsert_instance "sharedpage-realtime" "http://realtime:8080"
+  for f in submission.yaml voting.yaml canvas.yaml archive.yaml realtime.yaml; do
+    import_openapi "$OPENAPI_DIR/$f"
+  done
+  host_ident "$PRIVATE_HOST" "sharedpage-gateway"
+fi
 
 echo
-echo "==> Registration complete. After edge sync:"
-cat <<EOF
-curl -sS -H 'Host: ${PUBLIC_HOST}' http://127.0.0.1/ | head
-curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${PUBLIC_HOST}' http://127.0.0.1/internal/v1/canvas/append
-curl -sS -D- -H 'Host: colorbook-internal' http://127.0.0.1/v1/canvas/today -o /dev/null
+echo "==> Registration complete ($SIDE). After edge sync:"
+if [[ "$SIDE" == "public" ]]; then
+  cat <<EOF
+curl -sS -H 'Host: ${PUBLIC_HOST_PROD}' http://127.0.0.1/ | head
+curl -sS -o /dev/null -w '%{http_code}\\n' -H 'Host: ${PRIVATE_HOST}' http://127.0.0.1/v1/canvas/today
+# expect no private route on the public edge
 EOF
+else
+  cat <<EOF
+# private edge is Docker-only; from a compose service:
+#   wget -qO- --header='Host: ${PRIVATE_HOST}' http://mendr-gateway-private/v1/canvas/today
+EOF
+fi
 echo "Done."

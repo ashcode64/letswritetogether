@@ -1,20 +1,22 @@
 # Mendr integration
 
-Colorbook fronts browser and mesh traffic with **one** Mendr data-plane edge. Redis pub/sub and Postgres stay direct. Device sessions and Ed25519 service JWTs stay in Go.
+Colorbook fronts browser and mesh traffic with **two** Mendr data-plane edges (public + private), each synced from its **own control-plane tenant**. That way the public edge never receives `/internal` routes. Redis pub/sub and Postgres stay direct. Device sessions and Ed25519 service JWTs stay in Go.
 
 ## Topology
 
 ```mermaid
-flowchart LR
-  browser[Browser / Cloudflare] --> mendr[Mendr data plane :80]
-  mendr -->|"Host: localhost / sharedpage.app"| gw[colorbook-gateway]
-  gw -->|"Host: colorbook-internal"| mendr
-  orch[orchestrator] -->|"Host: colorbook-internal"| mendr
-  mendr --> sub[submission]
-  mendr --> vote[voting]
-  mendr --> canvas[canvas]
-  mendr --> rt[realtime]
-  mendr --> arch[archive]
+flowchart TB
+  browser[Browser / Cloudflare] --> pub[mendr-gateway-public :80]
+  pub -->|"Host: localhost / sharedpage.app"| gw[gateway]
+  gw -->|"Host: sharedpage-internal"| priv[mendr-gateway-private]
+  orch[orchestrator] -->|"Host: sharedpage-internal"| priv
+  priv --> sub[submission]
+  priv --> vote[voting]
+  priv --> canvas[canvas]
+  priv --> rt[realtime]
+  priv --> arch[archive]
+  cp[Mendr CP] -->|"tenant PUBLIC snapshot"| pub
+  cp -->|"tenant PRIVATE snapshot"| priv
   sub --> redis[(Redis)]
   vote --> redis
   orch --> redis
@@ -23,60 +25,77 @@ flowchart LR
   arch --> pg
 ```
 
+Hop count matches the old dual-Caddy design (browser → public edge → gateway → private edge → service). No extra latency.
+
+## Why two tenants
+
+Mendr syncs the **full tenant snapshot** to every edge of that tenant. One tenant with two edges would still put `sharedpage-internal` routes on the public edge (spoofable Host). Separate tenants give complete isolation: the public edge physically cannot route `/internal/*`.
+
 ## Host table
 
-| Host | Purpose | Allowed targets |
-|------|---------|-----------------|
-| `localhost` | Local public | `colorbook-gateway` only |
-| `sharedpage.app` | Production public | `colorbook-gateway` only |
-| `colorbook-internal` | Private mesh | submission, voting, canvas, archive, realtime |
-
-Public hosts must **not** route `/internal/*`. That invariant is “routes only exist under `colorbook-internal`.”
+| Host | Edge | Allowed targets |
+|------|------|-----------------|
+| `localhost` | public | `sharedpage-gateway` only |
+| `sharedpage.app` | public | `sharedpage-gateway` only |
+| `sharedpage-internal` | private | submission, voting, canvas, archive, realtime |
 
 ## Service registry
 
-| Service name | Instance base URL | Ingress host(s) for its routes |
-|--------------|-------------------|--------------------------------|
-| `colorbook-public` | synthetic source (no upstream required) | identity for `localhost` |
-| `colorbook-public-prod` | synthetic source | identity for `sharedpage.app` |
-| `colorbook-gateway` | `http://gateway:8080` | public paths (as **target**); private identity source |
-| `colorbook-submission` | `http://submission:8080` | `colorbook-internal` |
-| `colorbook-voting` | `http://voting:8080` | `colorbook-internal` |
-| `colorbook-canvas` | `http://canvas:8080` | `colorbook-internal` |
-| `colorbook-archive` | `http://archive:8080` | `colorbook-internal` |
-| `colorbook-realtime` | `http://realtime:8080` | `colorbook-internal` |
+| Service name | Instance base URL | Tenant / host |
+|--------------|-------------------|---------------|
+| `sharedpage-public` | synthetic source | PUBLIC — identity for `localhost` |
+| `sharedpage-public-prod` | synthetic source | PUBLIC — identity for `sharedpage.app` |
+| `sharedpage-gateway` | `http://gateway:8080` | PUBLIC target + PRIVATE identity source |
+| `sharedpage-submission` | `http://submission:8080` | PRIVATE — `sharedpage-internal` |
+| `sharedpage-voting` | `http://voting:8080` | PRIVATE — `sharedpage-internal` |
+| `sharedpage-canvas` | `http://canvas:8080` | PRIVATE — `sharedpage-internal` |
+| `sharedpage-archive` | `http://archive:8080` | PRIVATE — `sharedpage-internal` |
+| `sharedpage-realtime` | `http://realtime:8080` | PRIVATE — `sharedpage-internal` |
 
-OpenAPI uses `x-mendr-service` (target), `x-mendr-source` (caller identity), and `x-mendr-host` (ingress table). CP resolves ingress host **per source app** from the OpenAPI registry — keep private imports on `colorbook-internal` and use two public source apps for the two public hosts.
+OpenAPI uses `x-mendr-service`, `x-mendr-source`, and `x-mendr-host`. Public specs live under `localhost` / `sharedpage.app`; private specs under `sharedpage-internal`.
 
 ## Env reference
 
 | Variable | Who | Meaning |
 |----------|-----|---------|
-| `MENDR_CONTROL_PLANE_URL` | Mendr edge | CP base URL (e.g. Netcup `:8095`) |
-| `GATEWAY_EDGE_API_KEY` | Mendr edge | Per-tenant edge sync key |
-| `GATEWAY_INTERNAL_API_KEY` | register scripts / CP | Internal CP API auth when enabled |
-| `MENDR_INGRESS_ENABLED` | Mendr edge | `true` |
-| `MENDR_HOST_IDENTITY_FALLBACK` | Mendr edge | `true` — Host map when no `X-Mendr-Key` |
-| `MENDR_TLS_REQUIRED` | Mendr edge | `false` (Cloudflare terminates TLS) |
-| `PROXY_URL` | gateway, orchestrator | `http://mendr-gateway:80` |
-| `PROXY_HOST` | gateway, orchestrator | `colorbook-internal` |
-| `PUBLIC_HOST` | register | Public ingress host (default `localhost`) |
-| `PUBLIC_HOST_PROD` | register | Second public host (default `sharedpage.app`) |
-| `MENDR_AUTO_REGISTER` | register / compose | `true` to run registration on deploy |
-| `MENDR_REGISTER_CONTROL_PLANE_URL` | register on host | Optional; overrides CP URL when host ≠ Docker DNS |
-| `MENDR_REGISTER_WAIT_SEC` | register | How long to wait for CP (default `120`) |
+| `MENDR_CONTROL_PLANE_URL` | both edges | CP base URL |
+| `GATEWAY_EDGE_API_KEY_PUBLIC` | public edge + register | Public-tenant `mendr_…` key |
+| `GATEWAY_EDGE_API_KEY_PRIVATE` | private edge + register | Private-tenant `mendr_…` key |
+| `MENDR_TENANT_ID_PUBLIC` | public edge | Default `…0001` |
+| `MENDR_TENANT_ID_PRIVATE` | private edge | Default `…0002` |
+| `GATEWAY_INTERNAL_API_KEY` | optional | CP `X-Internal-Api-Key` for `/api/internal` |
+| `PROXY_URL` | gateway, orchestrator | `http://mendr-gateway-private:80` |
+| `PROXY_HOST` | gateway, orchestrator | `sharedpage-internal` |
+| `PUBLIC_HOST` / `PUBLIC_HOST_PROD` | register | Public ingress hosts |
+| `PRIVATE_HOST` | register | Default `sharedpage-internal` |
+| `MENDR_AUTO_REGISTER` | register | `true` to register on deploy |
 
 See `.env.mendr.example`.
 
+## Compose services
+
+- `mendr-gateway-public` — publishes `:80` / `:8080` locally; image `teammendr/themendr:latest` (needs **arm64** on Oracle A1)
+- `mendr-gateway-private` — **no published ports**
+- `mendr-edge-redis-public` / `mendr-edge-redis-private`
+- `mendr-register-public` / `mendr-register-private` (`MENDR_SIDE=public|private`)
+
 ## SSE and `/internal`
 
-- Gateway sets `FlushInterval = -1` on its reverse proxy. Mendr ingress uses `proxy_buffering off`. Still smoke-test `GET /v1/events`.
-- `/internal/*` only on Host `colorbook-internal`, with orchestrator JWTs enforced by Go services.
+- Gateway sets `FlushInterval = -1`. Mendr ingress uses `proxy_buffering off`.
+- `/internal/*` exists only on the **private** tenant/edge. Spoofing `Host: sharedpage-internal` against the public edge returns no route.
 
 ## Deploy rule
 
-The Mendr **edge** must share the Docker network with colorbook services so `http://gateway:8080` resolves. Control plane may live elsewhere (e.g. Netcup). An edge on Netcup alone cannot reach Oracle Docker DNS names.
+Both edges share the colorbook Docker network so `http://gateway:8080` resolves. Control plane may live elsewhere (e.g. Netcup). Create the private tenant (`…0002`) and mint both edge keys on the CP before first deploy.
 
 ## Ops
 
-`docker compose --env-file .env.mendr up --build -d` runs Mendr as the only HTTP edge. Onboarding: [MENDR_ONBOARDING_RUNBOOK.md](MENDR_ONBOARDING_RUNBOOK.md).
+```bash
+./mendr/scripts/deploy.sh          # up + register both sides
+# or
+docker compose --env-file .env.mendr up --build -d
+docker compose --env-file .env.mendr run --rm mendr-register-public
+docker compose --env-file .env.mendr run --rm mendr-register-private
+```
+
+Onboarding: [MENDR_ONBOARDING_RUNBOOK.md](MENDR_ONBOARDING_RUNBOOK.md). ADR: [adr/0002-two-mendr-edges.md](adr/0002-two-mendr-edges.md).
