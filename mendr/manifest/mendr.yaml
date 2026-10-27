@@ -1,0 +1,32 @@
+# Optional GitOps-style summary. Prefer OpenAPI import via register.sh for routes.
+# Host identity and instances are applied by mendr/scripts/register.sh|.ps1.
+apiVersion: mendr/v1
+kind: ColorbookMesh
+hosts:
+  - host: localhost
+    sourceService: colorbook-public
+  - host: sharedpage.app
+    sourceService: colorbook-public-prod
+  - host: colorbook-internal
+    sourceService: colorbook-gateway
+services:
+  - name: colorbook-gateway
+    baseUrl: http://gateway:8080
+  - name: colorbook-submission
+    baseUrl: http://submission:8080
+  - name: colorbook-voting
+    baseUrl: http://voting:8080
+  - name: colorbook-canvas
+    baseUrl: http://canvas:8080
+  - name: colorbook-archive
+    baseUrl: http://archive:8080
+  - name: colorbook-realtime
+    baseUrl: http://realtime:8080
+openapi:
+  - mendr/openapi/gateway-localhost.yaml
+  - mendr/openapi/gateway-sharedpage.yaml
+  - mendr/openapi/submission.yaml
+  - mendr/openapi/voting.yaml
+  - mendr/openapi/canvas.yaml
+  - mendr/openapi/archive.yaml
+  - mendr/openapi/realtime.yaml

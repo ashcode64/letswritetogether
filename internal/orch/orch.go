@@ -3,15 +3,15 @@ package orch
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
-
-	"crypto/ed25519"
 
 	"colorbook/internal/clock"
 	"colorbook/internal/keys"
@@ -20,16 +20,17 @@ import (
 )
 
 type Orch struct {
-	RDB      *redis.Client
-	Proxy    string
-	Signer   ed25519.PrivateKey
-	ID       string
-	HTTP     *http.Client
-	ready    bool
-	last     int64
-	sealed   string
-	pubRound int64
-	pubPhase string
+	RDB       *redis.Client
+	Proxy     string
+	ProxyHost string
+	Signer    ed25519.PrivateKey
+	ID        string
+	HTTP      *http.Client
+	ready     bool
+	last      int64
+	sealed    string
+	pubRound  int64
+	pubPhase  string
 }
 
 func (o *Orch) Hold(ctx context.Context) (bool, error) {
@@ -175,6 +176,10 @@ func (o *Orch) post(ctx context.Context, url string, body any, out any, aud stri
 	req.Header.Set("Authorization", "Bearer "+tok)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if host := strings.TrimSpace(o.ProxyHost); host != "" {
+		req.Host = host
+		req.Header.Set("Host", host)
 	}
 	client := o.HTTP
 	if client == nil {

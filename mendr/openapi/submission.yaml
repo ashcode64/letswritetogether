@@ -1,0 +1,28 @@
+openapi: 3.0.3
+info:
+  title: Colorbook Submission
+  version: 1.0.0
+x-mendr-service: colorbook-submission
+x-mendr-source: colorbook-gateway
+x-mendr-host: colorbook-internal
+x-mendr-enforce: observe
+servers:
+  - url: http://submission:8080
+paths:
+  /v1/rounds/{id}/words:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: List words for round
+      responses:
+        "200":
+          description: Words
+    post:
+      summary: Submit word
+      responses:
+        "200":
+          description: Created or joined

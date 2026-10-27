@@ -1,0 +1,125 @@
+openapi: 3.0.3
+info:
+  title: Colorbook Gateway (public sharedpage.app)
+  version: 1.0.0
+  description: Same public routes as localhost; separate source so CP can attach a second ingress host.
+x-mendr-service: colorbook-gateway
+x-mendr-source: colorbook-public-prod
+x-mendr-host: sharedpage.app
+x-mendr-enforce: observe
+servers:
+  - url: http://gateway:8080
+paths:
+  /:
+    get:
+      summary: Essay page
+      responses:
+        "200":
+          description: HTML
+  /app.js:
+    get:
+      summary: Client script
+      responses:
+        "200":
+          description: JavaScript
+  /app.css:
+    get:
+      summary: Stylesheet
+      responses:
+        "200":
+          description: CSS
+  /healthz:
+    get:
+      summary: Gateway health
+      responses:
+        "200":
+          description: OK
+  /v1/sessions/config:
+    get:
+      summary: Turnstile site key
+      responses:
+        "200":
+          description: JSON
+  /v1/sessions/challenge:
+    post:
+      summary: Proof-of-work challenge
+      responses:
+        "200":
+          description: Challenge
+  /v1/sessions:
+    post:
+      summary: Mint device session
+      responses:
+        "200":
+          description: Access token
+  /v1/sessions/refresh:
+    post:
+      summary: Rotate refresh cookie
+      responses:
+        "200":
+          description: Access token
+  /v1/rounds/current:
+    get:
+      summary: Current minute phase
+      responses:
+        "200":
+          description: Phase JSON
+  /v1/rounds/{id}/words:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Ballot for round
+      responses:
+        "200":
+          description: Words
+    post:
+      summary: Submit fragment
+      responses:
+        "200":
+          description: Word id
+  /v1/rounds/{id}/vote:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      summary: Cast or clear vote
+      responses:
+        "200":
+          description: Vote ack
+  /v1/canvas/today:
+    get:
+      summary: Today essay
+      responses:
+        "200":
+          description: JSON
+  /v1/canvas/days:
+    get:
+      summary: Days with winners
+      responses:
+        "200":
+          description: JSON
+  /v1/canvas/{day}:
+    parameters:
+      - name: day
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: One day essay
+      responses:
+        "200":
+          description: JSON
+  /v1/events:
+    get:
+      summary: SSE live feed
+      responses:
+        "200":
+          description: text/event-stream

@@ -1,0 +1,23 @@
+openapi: 3.0.3
+info:
+  title: Colorbook Archive
+  version: 1.0.0
+x-mendr-service: colorbook-archive
+x-mendr-source: colorbook-gateway
+x-mendr-host: colorbook-internal
+x-mendr-enforce: observe
+servers:
+  - url: http://archive:8080
+paths:
+  /internal/v1/days/{day}/seal:
+    parameters:
+      - name: day
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Seal UTC day
+      responses:
+        "200":
+          description: OK

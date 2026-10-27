@@ -15,6 +15,73 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+  mendr-edge-redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mendr-gateway:
+    image: teammendr/themendr:static-site-latest
+    ports:
+      - "80:80"
+      - "8080:8080"
+    environment:
+      MENDR_CONTROL_PLANE_URL: ${MENDR_CONTROL_PLANE_URL:-http://host.docker.internal:8095}
+      MENDR_REDIS_HOST: mendr-edge-redis
+      MENDR_REDIS_PORT: "6379"
+      MENDR_JAVA_FALLBACK: "false"
+      MENDR_DOCKER_HOST_REWRITE: ${MENDR_DOCKER_HOST_REWRITE:-host.docker.internal}
+      GATEWAY_EDGE_API_KEY: ${GATEWAY_EDGE_API_KEY:-}
+      GATEWAY_INTERNAL_API_KEY: ${GATEWAY_INTERNAL_API_KEY:-}
+      MENDR_TENANT_ID: ${MENDR_TENANT_ID:-}
+      MENDR_INGRESS_ENABLED: ${MENDR_INGRESS_ENABLED:-true}
+      MENDR_HOST_IDENTITY_FALLBACK: ${MENDR_HOST_IDENTITY_FALLBACK:-true}
+      MENDR_TLS_REQUIRED: ${MENDR_TLS_REQUIRED:-false}
+      MENDR_STATIC_BASE_DIR: ${MENDR_STATIC_BASE_DIR:-}
+      MENDR_FULL_RESYNC_INTERVAL_SEC: ${MENDR_FULL_RESYNC_INTERVAL_SEC:-300}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      mendr-edge-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  # One-shot: register OpenAPI + host identity with the control plane from .env.
+  # Re-run with: docker compose --env-file .env.mendr run --rm mendr-register
+  mendr-register:
+    image: alpine:3.20
+    restart: "no"
+    environment:
+      MENDR_CONTROL_PLANE_URL: ${MENDR_CONTROL_PLANE_URL:-http://host.docker.internal:8095}
+      MENDR_REGISTER_CONTROL_PLANE_URL: ${MENDR_REGISTER_CONTROL_PLANE_URL:-${MENDR_CONTROL_PLANE_URL:-http://host.docker.internal:8095}}
+      GATEWAY_INTERNAL_API_KEY: ${GATEWAY_INTERNAL_API_KEY:-}
+      MENDR_TENANT_ID: ${MENDR_TENANT_ID:-00000000-0000-0000-0000-000000000001}
+      MENDR_AUTO_REGISTER: ${MENDR_AUTO_REGISTER:-true}
+      MENDR_REGISTER_WAIT_SEC: ${MENDR_REGISTER_WAIT_SEC:-120}
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      PUBLIC_HOST_PROD: ${PUBLIC_HOST_PROD:-sharedpage.app}
+      MENDR_OPENAPI_DIR: /mendr/openapi
+      MENDR_ENV_LOADED: "1"
+    volumes:
+      - ./mendr:/mendr:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    entrypoint: ["/bin/sh", "/mendr/scripts/docker-register.sh"]
+    depends_on:
+      mendr-gateway:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+
   submission:
     build: .
     image: colorbook:local
@@ -23,7 +90,8 @@ services:
       REDIS_ADDR: redis:6379
       DATABASE_URL: postgres://colorbook:colorbook@postgres:5432/colorbook?sslmode=disable
       COOKIE_SECRET: dev-cookie-secret
-      PROXY_URL: http://proxy:80
+      PROXY_URL: http://mendr-gateway:80
+      PROXY_HOST: colorbook-internal
       BLOCKLIST: /app/data/blocklist
       POW_MAX: "20000"
       TURNSTILE_SITE_KEY: 1x00000000000000000000AA
@@ -65,23 +133,19 @@ services:
     environment:
       <<: *env
       ORCH_PRIVATE_KEY: 4c93e269cec503816456b958e754b48be39561df173fafd77bd440d29924ec1c
-    depends_on: [redis, proxy]
+    depends_on:
+      redis:
+        condition: service_started
+      mendr-gateway:
+        condition: service_started
   gateway:
     image: colorbook:local
     command: ["/app/gateway"]
     environment:
       <<: *env
       GATEWAY_PRIVATE_KEY: 34363dfe0fa1a2d3aa926cbf941b800cdcfae44b309d0e2af2ab8e2adca4c747
-    depends_on: [redis, proxy]
-  proxy:
-    image: caddy:2-alpine
-    volumes:
-      - ./deploy/Caddyfile.proxy:/etc/caddy/Caddyfile:ro
-    depends_on: [submission, voting, canvas, archive, realtime]
-  edge:
-    image: caddy:2-alpine
-    ports:
-      - "80:80"
-    volumes:
-      - ./deploy/Caddyfile.public:/etc/caddy/Caddyfile:ro
-    depends_on: [gateway]
+    depends_on:
+      redis:
+        condition: service_started
+      mendr-gateway:
+        condition: service_started

@@ -1,0 +1,41 @@
+openapi: 3.0.3
+info:
+  title: Colorbook Canvas
+  version: 1.0.0
+x-mendr-service: colorbook-canvas
+x-mendr-source: colorbook-gateway
+x-mendr-host: colorbook-internal
+x-mendr-enforce: observe
+servers:
+  - url: http://canvas:8080
+paths:
+  /v1/canvas/today:
+    get:
+      summary: Today
+      responses:
+        "200":
+          description: JSON
+  /v1/canvas/days:
+    get:
+      summary: Days list
+      responses:
+        "200":
+          description: JSON
+  /v1/canvas/{day}:
+    parameters:
+      - name: day
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: One day
+      responses:
+        "200":
+          description: JSON
+  /internal/v1/canvas/append:
+    post:
+      summary: Append winner
+      responses:
+        "200":
+          description: OK

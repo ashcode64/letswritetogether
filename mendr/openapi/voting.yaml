@@ -1,0 +1,35 @@
+openapi: 3.0.3
+info:
+  title: Colorbook Voting
+  version: 1.0.0
+x-mendr-service: colorbook-voting
+x-mendr-source: colorbook-gateway
+x-mendr-host: colorbook-internal
+x-mendr-enforce: observe
+servers:
+  - url: http://voting:8080
+paths:
+  /v1/rounds/{id}/vote:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      summary: Cast or clear vote
+      responses:
+        "200":
+          description: Vote ack
+  /internal/v1/rounds/{id}/tally:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Orchestrator tally
+      responses:
+        "200":
+          description: Winner or skip

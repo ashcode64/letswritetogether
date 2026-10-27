@@ -32,16 +32,28 @@ type Service struct {
 	PowMax          int
 	Priv            ed25519.PrivateKey
 	Proxy           *httputil.ReverseProxy
+	ProxyHost       string
 	lim             *limiter
 }
 
-func New(rdb *redis.Client, secret, proxyURL string, secure bool, priv ed25519.PrivateKey, turnstileSecret, turnstileSite string, powMax int) *Service {
+// New builds the gateway. proxyHost, when set (PROXY_HOST), is forced on every
+// reverse-proxy hop so Mendr matches the private ingress table (colorbook-internal).
+func New(rdb *redis.Client, secret, proxyURL, proxyHost string, secure bool, priv ed25519.PrivateKey, turnstileSecret, turnstileSite string, powMax int) *Service {
 	target, err := url.Parse(proxyURL)
 	if err != nil {
 		panic(err)
 	}
+	proxyHost = strings.TrimSpace(proxyHost)
 	p := httputil.NewSingleHostReverseProxy(target)
 	p.FlushInterval = -1
+	baseDirector := p.Director
+	p.Director = func(req *http.Request) {
+		baseDirector(req)
+		if proxyHost != "" {
+			req.Host = proxyHost
+			req.Header.Set("Host", proxyHost)
+		}
+	}
 	p.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		problem.Write(w, http.StatusBadGateway, "UPSTREAM", "the next service did not answer")
 	}
@@ -51,7 +63,7 @@ func New(rdb *redis.Client, secret, proxyURL string, secure bool, priv ed25519.P
 	return &Service{
 		RDB: rdb, Secret: secret, Secure: secure, TrustCF: os.Getenv("TRUST_CF_CONNECTING_IP") == "1",
 		TurnstileSecret: turnstileSecret, TurnstileSite: turnstileSite, PowMax: powMax,
-		Priv: priv, Proxy: p, lim: newLimiter(),
+		Priv: priv, Proxy: p, ProxyHost: proxyHost, lim: newLimiter(),
 	}
 }
 

@@ -63,19 +63,19 @@ A hit is `422 WORD_REJECTED` and is never published. A pass publishes the origin
 
 ## Architecture
 
-Seven Go 1.23 services. Public writes are REST. Live updates are Server-Sent Events. Redis holds the live minute. Postgres stores essays and nothing else on the hot path. Service-to-service REST goes through one private Caddy proxy. The public Caddy site talks only to the gateway and does not route `/internal`.
+Seven Go 1.23 services. Public writes are REST. Live updates are Server-Sent Events. Redis holds the live minute. Postgres stores essays and nothing else on the hot path. Browser and service-to-service REST go through **one Mendr data-plane edge** with two ingress hosts. Redis pub/sub does not go through Mendr.
 
 ```mermaid
 flowchart LR
-  browser[Browser] --> edge[Public Caddy]
-  edge --> gateway[gateway]
-  gateway --> proxy[Private Caddy]
-  orchestrator[orchestrator] --> proxy
-  proxy --> submission[submission]
-  proxy --> voting[voting]
-  proxy --> canvas[canvas]
-  proxy --> realtime[realtime]
-  proxy --> archive[archive]
+  browser[Browser] --> mendr[Mendr data plane]
+  mendr -->|"Host: localhost / sharedpage.app"| gateway[gateway]
+  gateway -->|"Host: colorbook-internal"| mendr
+  orchestrator[orchestrator] -->|"Host: colorbook-internal"| mendr
+  mendr --> submission[submission]
+  mendr --> voting[voting]
+  mendr --> canvas[canvas]
+  mendr --> realtime[realtime]
+  mendr --> archive[archive]
   submission --> redis[(Redis)]
   voting --> redis
   orchestrator --> redis
@@ -86,7 +86,7 @@ flowchart LR
 
 | Service | Role |
 | --- | --- |
-| gateway | Mints the device cookie, rate-limits, serves the page, and forwards public REST to the private proxy. |
+| gateway | Mints the device cookie, rate-limits, serves the page, and forwards public REST to Mendr with `Host: colorbook-internal`. |
 | submission | Checks the charset and blocklist, stores one exact text per round, and publishes `word.approved`. |
 | voting | Applies votes in one Redis Lua script. Tallies the minute when the orchestrator asks. Does not publish per-vote counts. |
 | orchestrator | Holds the lease, closes each minute, appends a winner or records a skip, and asks archive to seal at UTC midnight. |
@@ -94,13 +94,15 @@ flowchart LR
 | archive | Seals a UTC day and deletes days older than 31. It is the only service that deletes rows. |
 | realtime | Holds SSE sockets and fans out `word.approved`, `round.phase`, `round.winner`, and `round.skipped`. A slow client is dropped. |
 
-Submission, voting, canvas, archive, and realtime do not call each other. Redis pub/sub does not go through the proxy.
+Submission, voting, canvas, archive, and realtime do not call each other.
 
 The orchestrator is the only writer of the phase key. It takes a Redis lease (`SET NX PX`) and renews it. If it loses the lease it does not close a round. A stored outcome makes a retry a no-op, so a skip cannot later become a blank slot and a winner cannot be appended twice. The unique key is `(day, round_number)`.
 
+Public Host tables send traffic **only** to `colorbook-gateway`. `/internal/*` exists only under Host `colorbook-internal`. See [docs/MENDR_INTEGRATION.md](docs/MENDR_INTEGRATION.md) and [docs/MENDR_ONBOARDING_RUNBOOK.md](docs/MENDR_ONBOARDING_RUNBOOK.md).
+
 ## Public API
 
-The browser calls these on the public site. `POST /v1/sessions` and `GET /v1/rounds/current` are answered by the gateway. Everything else is proxied.
+The browser calls these on the public site. `POST /v1/sessions` and `GET /v1/rounds/current` are answered by the gateway. Everything else is proxied through Mendr to the owning service.
 
 | Method | Path | Body / result |
 | --- | --- | --- |
@@ -121,7 +123,7 @@ Errors are `application/problem+json`. Codes include `SUBMISSION_CLOSED`, `VOTIN
 
 ## Internal API
 
-These routes require a 30-second Ed25519 JWT. Tally, append, and seal accept only a token signed by the orchestrator key. The gateway key cannot close a round. The public Caddyfile does not route `/internal`, and the private proxy is not published.
+These routes require a 30-second Ed25519 JWT. Tally, append, and seal accept only a token signed by the orchestrator key. The gateway key cannot close a round. Internal paths are registered only on Mendr Host `colorbook-internal`, not on the public host.
 
 | Method | Path | Effect |
 | --- | --- | --- |
@@ -137,23 +139,45 @@ Postgres 16 stores `days` and `slots`. A slot exists only for a minute that elec
 
 ## Run it locally
 
-Docker Compose publishes the public site on port 80 without TLS, so a lab machine can open it directly. Production uses `docker-compose.prod.yml`: cloudflared dials out to Cloudflare, port 80 is not published, and the gateway trusts `CF-Connecting-IP`. SSH stays on a bastion. Do not cache or buffer `/v1/events`.
+1. Copy `.env.mendr.example` → `.env.mendr` and set `MENDR_CONTROL_PLANE_URL` plus `GATEWAY_EDGE_API_KEY`.
+2. Deploy (starts the stack and registers OpenAPI + host identity with the control plane from that env file).
 
 ```bash
-docker compose up --build -d
+# Linux / macOS / Git Bash
+./mendr/scripts/deploy.sh
+
+# Windows PowerShell
+.\mendr\scripts\deploy.ps1
+```
+
+Or plain Compose — the `mendr-register` one-shot runs after `mendr-gateway` is healthy when `MENDR_AUTO_REGISTER=true`:
+
+```bash
+docker compose --env-file .env.mendr up --build -d
+# re-register later:
+docker compose --env-file .env.mendr run --rm mendr-register
 ```
 
 Open `http://localhost/`.
 
-The Compose file uses local defaults: Postgres user, password, and database `colorbook`, `COOKIE_SECRET=dev-cookie-secret`, Cloudflare's always-pass Turnstile test keys, and dev Ed25519 seeds. Change those before exposing a host. `COOKIE_SECURE=1` is set by the production compose. The image tag shared by the Go services is `colorbook:local`. The page, stylesheet, and script are embedded in the gateway binary, so a UI change needs `docker compose up --build -d gateway`.
+Production overlay: cloudflared dials out to Cloudflare and targets `http://mendr-gateway:80`. Port 80 is not published. The gateway trusts `CF-Connecting-IP`.
 
-Go 1.23 is the language version. Tests use the standard toolchain:
+```bash
+DEPLOY_PROD=1 ./mendr/scripts/deploy.sh
+# or
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.mendr up --build -d
+```
+
+
+Compose defaults: Postgres user/password/db `colorbook`, `COOKIE_SECRET=dev-cookie-secret`, Cloudflare always-pass Turnstile test keys, and dev Ed25519 seeds. Change those before exposing a host. The Go image tag is `colorbook:local`. UI changes need `docker compose up --build -d gateway`.
+
+Go 1.23 is the language version:
 
 ```bash
 go test ./...
 ```
 
-`cmd/load` is a small crowd against the public origin. Words are letters only, because digits are rejected.
+`cmd/load` is a small crowd against the public origin:
 
 ```bash
 go run ./cmd/load -url http://localhost -painters 20 -viewers 20 -hold 3s
@@ -165,12 +189,14 @@ go run ./cmd/load -url http://localhost -painters 20 -viewers 20 -hold 3s
 cmd/            one main package per service, plus cmd/load
 internal/       clock, words, filter, essay join, Redis scripts, and each service
 web/            the page, embedded by the gateway
-deploy/         public Caddyfile and the private proxy Caddyfile
+mendr/          OpenAPI, register scripts, optional manifest
+docs/           Mendr integration + ADR
 data/blocklist  vendored lists and data/blocklist/LICENSE
 ```
+
 
 The module path is `colorbook`. The name on the page is Let's Write Together.
 
 ## Host
 
-The intended host is one VM with 2 cores and 12 GB of RAM. Compose runs public Caddy, the private proxy, Redis, Postgres (`shared_buffers=256MB`), and the seven Go binaries. Listeners are cheap because SSE is idle between fragments. The sharp moment is a burst of votes in the last second: gateway, private proxy, voting, one Lua script. Raise the open-file limit before expecting thousands of SSE sockets.
+The intended host is one VM with 2 cores and 12 GB of RAM. Compose runs Mendr data plane, Redis, Postgres (`shared_buffers=256MB`), and the seven Go binaries. The Mendr edge must share that Docker network so upstream names like `gateway` resolve. Control plane may be remote. Raise the open-file limit before expecting thousands of SSE sockets.

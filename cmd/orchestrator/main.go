@@ -24,11 +24,12 @@ func main() {
 		log.Fatal(err)
 	}
 	o := &orch.Orch{
-		RDB:    live.Open(),
-		Proxy:  serve.Env("PROXY_URL", "http://127.0.0.1:8081"),
-		Signer: signer,
-		ID:     hex.EncodeToString(buf),
-		HTTP:   &http.Client{Timeout: 3 * time.Second},
+		RDB:       live.Open(),
+		Proxy:     serve.Env("PROXY_URL", "http://127.0.0.1:8081"),
+		ProxyHost: serve.Env("PROXY_HOST", ""),
+		Signer:    signer,
+		ID:        hex.EncodeToString(buf),
+		HTTP:      &http.Client{Timeout: 3 * time.Second},
 	}
 	ctx := context.Background()
 	for {

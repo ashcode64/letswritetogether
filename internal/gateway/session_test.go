@@ -26,7 +26,7 @@ func TestMintRefreshAndReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(rdb, "secret", "http://127.0.0.1", false, priv, testTurnstile, "site", 200)
+	s := New(rdb, "secret", "http://127.0.0.1", "", false, priv, testTurnstile, "site", 200)
 	mux := http.NewServeMux()
 	s.Register(mux)
 
