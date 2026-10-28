@@ -69,6 +69,7 @@ OpenAPI uses `x-mendr-service`, `x-mendr-source`, and `x-mendr-host`. Public spe
 | `PUBLIC_HOST` / `PUBLIC_HOST_PROD` | register | Public ingress hosts |
 | `PRIVATE_HOST` | register | Default `sharedpage-internal` |
 | `MENDR_AUTO_REGISTER` | register | `true` to register on deploy |
+| `MENDR_UPSTREAM_ALLOW_CIDRS` | both edges | Phase 0 SSRF allow-list (Docker RFC1918); empty → `SSRF-filtered` on `172.16/12` etc. |
 
 See `.env.mendr.example`.
 
