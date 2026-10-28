@@ -30,7 +30,13 @@ func (f *Filter) Reject(original string) bool {
 	if _, ok := f.allow[core]; ok {
 		return false
 	}
-	if _, ok := f.skeleton[Skeleton(core)]; ok {
+	// Short skeletons (e.g. "c" from choochi) collide with ordinary English
+	// like ice/ace/cook. Require enough consonants to stay discriminative.
+	sk := Skeleton(core)
+	if len(sk) < 3 {
+		return false
+	}
+	if _, ok := f.skeleton[sk]; ok {
 		return true
 	}
 	return false
@@ -86,6 +92,7 @@ func Skeleton(s string) string {
 
 // Load reads exact/*.txt, indic.txt, and allow.txt.
 // exact/hi.txt lemmas of length >= 6 also feed the phonetic tier.
+// allow.txt holds everyday English letter cores so common words skip that tier.
 func Load(dir string) (*Filter, error) {
 	f := &Filter{
 		exact:    map[string]struct{}{},

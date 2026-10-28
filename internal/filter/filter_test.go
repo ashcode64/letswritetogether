@@ -41,10 +41,30 @@ func TestLoadLists(t *testing.T) {
 	if len(f.exact) < 100 {
 		t.Fatalf("expected latin lists, got %d", len(f.exact))
 	}
-	if f.Reject("classic") {
-		t.Fatal("classic must survive the shipped lists")
+	if len(f.allow) < 1000 {
+		t.Fatalf("expected everyday allowlist, got %d", len(f.allow))
+	}
+	for _, w := range []string{"classic", "ice", "cook", "city", "each", "choice", "coach", "water", "hello"} {
+		if f.Reject(w) {
+			t.Fatalf("%q must survive the shipped lists", w)
+		}
 	}
 	if !f.Reject("sharmuta") || !f.Reject("Sharmuta!") || !f.Reject("caonima") {
 		t.Fatal("arabizi and hand-list lemmas must reject")
+	}
+	if !f.Reject("choochi") || !f.Reject("chutiya") {
+		t.Fatal("exact Indic lemmas must still reject")
+	}
+}
+
+func TestShortSkeletonDoesNotBlock(t *testing.T) {
+	f := &Filter{}
+	f.skeleton["c"] = struct{}{}
+	if f.Reject("ice") || f.Reject("ace") {
+		t.Fatal("skeleton keys shorter than 3 must not reject English")
+	}
+	f.skeleton["cty"] = struct{}{}
+	if !f.Reject("chutya") {
+		t.Fatal("skeleton length >= 3 should still reject")
 	}
 }

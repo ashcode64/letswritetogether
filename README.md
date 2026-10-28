@@ -56,7 +56,7 @@ The blocklist does not see the ballot text. It sees a letter core: casefolded, a
 Matching is exact on that core. There is no substring match and no edit distance.
 
 1. Latin-script lists from [LDNOOBW](https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words), used under [CC BY 4.0](data/blocklist/LICENSE).
-2. If the core is not on the English allowlist, an Indic phonetic skeleton is compared with lemmas in `data/blocklist/indic.txt`. The allowlist is what keeps ordinary words such as `classic` off that tier.
+2. If the core is not on the English allowlist (`data/blocklist/allow.txt`, ~10k everyday words), an Indic phonetic skeleton is compared with lemmas in `data/blocklist/indic.txt` and long `exact/hi.txt` entries. Skeletons shorter than three consonants are ignored so words like `ice` do not collide with `choochi`. The allowlist covers longer collisions such as `classic`.
 3. Exact Arabizi, Latin-transliterated Russian, and a short hand list for other romanizations.
 
 A hit is `422 WORD_REJECTED` and is never published. A pass publishes the original text, not the letter core. No list blocks every language. Spellings that are not on a list pass until a lemma is added.
